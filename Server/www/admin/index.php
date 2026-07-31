@@ -270,6 +270,27 @@ if(login_check())
 # session-timeout path, and login_form() exits too.
 
 
+# Emits the "go here in a moment" redirect the admin screens use after an action.
+#
+# This was copy-pasted 45 times in ten slightly different shapes. One of them had a stray
+# " $proto." inside the JavaScript string literal, which produced a broken URL - the kind
+# of thing that survives indefinitely when the same markup is duplicated by hand.
+#
+# $query is appended to admin/index.php as a query string ('' for the front page), and
+# $delay is in milliseconds - normally $page_timeout, which is 0 for an instant redirect.
+function uns_redirect($query = '', $delay = 0)
+{
+    $admin_url = $GLOBALS['admin_url'] ?? '';
+    $url = $admin_url.'admin/index.php'.($query !== '' ? '?'.$query : '');
+    echo "
+    <script>
+"
+        ."        setTimeout(\"location.href = '".$url."'\", ".(int)$delay.");
+"
+        ."    </script>
+";
+}
+
 # Names the RSS feed or custom message a URL refers to, when it points back at this UNS
 # install. Both the client view and the emergency list showed a column of near-identical
 # template.php links without it, and both had their own copy of this logic.
@@ -400,11 +421,7 @@ function admin_panel($usr, $func, $proto)
             if($stmt->execute([$cl_timezone, $usr]))
             {
                 echo "Changed Time Zone.";
-                ?>
-    <script>
-        setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=rss_feeds'",<?php echo $page_timeout;?>);
-    </script>
-                <?php
+                    uns_redirect('func=rss_feeds', $page_timeout);
             }else
             {
                 echo "Failed to Change Time Zone.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -514,11 +531,6 @@ function admin_panel($usr, $func, $proto)
             if(@filesize($backupFile) > 0)
             {
                 echo "Backed up to <a href='".$admin_url."admin/backups/".htmlspecialchars($filename, ENT_QUOTES)."' target='_blank'>".htmlspecialchars($filename, ENT_QUOTES)."</a><br /><a href='javascript:history.go(-1)'>Go back</a>";
-                ?>
-    <!--<script>
-        setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=edit_options'",<?php echo $page_timeout;?>);
-    </script>-->
-                <?php
             }else
             {
                 echo "Failed to Backup DB.<br /><a href='javascript:history.go(-1)'>Go back</a>";
@@ -673,11 +685,6 @@ function admin_panel($usr, $func, $proto)
 
             if($fp1 = fopen($cwd."configs/conn.php", 'w+'))
             {fwrite($fp1, $conn_file);echo "Wrote Conn Config File.<br />";
-            ?>
-    <!--<script>
-        setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=edit_options'",<?php echo $page_timeout;?>);
-    </script>-->
-            <?php
             }
             else{echo "Failed to write Conn Config File.<br />";}
             break;
@@ -733,11 +740,7 @@ function admin_panel($usr, $func, $proto)
                         if($stmt->execute([$name, $url, $maxlines]))
                         {
                             echo "Added Feeds.";
-                            ?>
-                <script>
-                    setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=rss_feeds'",<?php echo $page_timeout;?>);
-                </script>
-                            <?php
+                    uns_redirect('func=rss_feeds', $page_timeout);
                         }else
                         {
                             echo "Failed to update Feeds<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -748,11 +751,7 @@ function admin_panel($usr, $func, $proto)
                         {
                             if(!@$_POST['remove_'])
                             {
-                                ?>
-                        <script>
-                            setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=rss_feeds'",<?php echo $page_timeout;?>);
-                        </script>
-                                <?php
+                    uns_redirect('func=rss_feeds', $page_timeout);
                                 break;
                             }
                             foreach($_POST['remove_'] as $key=>$del)
@@ -803,11 +802,7 @@ function admin_panel($usr, $func, $proto)
                                 if($del_stmt2->execute([$del]))
                                 {
                                     echo "Removed message [$del_esc].";
-                                    ?>
-                        <script>
-                            setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=rss_feeds'",<?php echo $page_timeout;?>);
-                        </script>
-                                    <?php
+                    uns_redirect('func=rss_feeds', $page_timeout);
                                 }else
                                 {
                                     echo "Failed to Remove message [$del_esc].<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -826,11 +821,7 @@ function admin_panel($usr, $func, $proto)
                                 if($stmt->execute([$name, $url, $maxlines, $id]))
                                 {
                                     echo "Updated Feed [$id_esc] ($name_esc).";
-                                    ?>
-                        <script>
-                            setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=rss_feeds'",<?php echo $page_timeout;?>);
-                        </script>
-                                    <?php
+                    uns_redirect('func=rss_feeds', $page_timeout);
                                 }else
                                 {
                                     echo "Failed to Update Feed [$id_esc] ($name_esc).<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -913,11 +904,7 @@ function admin_panel($usr, $func, $proto)
                         if($stmt->execute([$name, $body, $wrapper]))
                         {
                             echo "Updated message.";
-                            ?>
-                <script>
-                    setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=c_messages'",<?php echo $page_timeout;?>);
-                </script>
-                            <?php
+                    uns_redirect('func=c_messages', $page_timeout);
                         }else
                         {
                             echo "Failed to update message<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -928,11 +915,7 @@ function admin_panel($usr, $func, $proto)
                         {
                             if(!@$_POST['remove_'])
                             {
-                                ?>
-                        <script>
-                            setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=c_messages'",<?php echo $page_timeout;?>);
-                        </script>
-                                <?php
+                    uns_redirect('func=c_messages', $page_timeout);
                                 break;
                             }
                             foreach($_POST['remove_'] as $key=>$del)
@@ -984,11 +967,7 @@ function admin_panel($usr, $func, $proto)
                                 if($del_stmt2->execute([$del]))
                                 {
                                     echo "Removed message [$del_esc].";
-                                    ?>
-                        <script>
-                            setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=c_messages'",<?php echo $page_timeout;?>);
-                        </script>
-                                    <?php
+                    uns_redirect('func=c_messages', $page_timeout);
                                 }else
                                 {
                                     echo "Failed to Remove message [$del_esc].<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -998,11 +977,7 @@ function admin_panel($usr, $func, $proto)
                         {
                             if(!@$_POST['body'])
                             {
-                                ?>
-                        <script>
-                            setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=c_messages'",<?php echo $page_timeout;?>);
-                        </script>
-                                <?php
+                    uns_redirect('func=c_messages', $page_timeout);
                                 break;
                             }
                             foreach($_POST['body'] as $key=>$body)
@@ -1016,11 +991,7 @@ function admin_panel($usr, $func, $proto)
                                 if($stmt->execute([$name, $body, $wrapper, $id]))
                                 {
                                     echo "Updated message [$id] ($name_esc).<br/>";
-                                    ?>
-                        <script>
-                            setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=c_messages'",<?php echo $page_timeout;?>);
-                        </script>
-                                    <?php
+                    uns_redirect('func=c_messages', $page_timeout);
                                 }else
                                 {
                                     echo "Failed to Update message [$id] ($name_esc).<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -1203,11 +1174,7 @@ function admin_panel($usr, $func, $proto)
                                 {
                                     echo "URLs for Client: $friend_esc have <u><b>NOT</b></u> been copied.<br /><br />\r\n";
                                 }
-                                ?>
-                   <script>
-                        setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
-                    </script>
-                                <?php
+                    uns_redirect('func=view_client&client='.$client_get, $page_timeout);
                                 echo "---------------<br />";
                             }
                             break;
@@ -1220,11 +1187,7 @@ function admin_panel($usr, $func, $proto)
                                 && (empty($_POST['urls']) || !is_array($_POST['urls'])))
                             {
                                 echo "No URLs were selected. Tick the boxes in the <b>Select</b> column first, then press the button.<br />";
-                                ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",3000);
-                    </script>
-                                <?php
+                    uns_redirect('func=view_client&client='.$client_get, 3000);
                                 break;
                             }
                             if(@$_POST['copy2'])
@@ -1279,11 +1242,7 @@ function admin_panel($usr, $func, $proto)
                                     if(empty($urls))
                                     {
                                         echo "No URLS were deleted, none to back up.<br />";
-                                        ?>
-                   <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
-                    </script>
-                                        <?php
+                    uns_redirect('func=view_client&client='.$client_get, $page_timeout);
                                     }else
                                     {
                                         $url_imp = implode("|", $urls);
@@ -1294,11 +1253,7 @@ function admin_panel($usr, $func, $proto)
                                         if($stmt->execute([$client_get, $url_imp, $name, $details, $time]))
                                         {
                                             echo "Backed up Links for ($client_get).";
-                                    ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
-                    </script>
-                                    <?php
+                    uns_redirect('func=view_client&client='.$client_get, $page_timeout);
                                         }else
                                         {
                                             echo "Failed to Back up Links for ($client_get).<br />\r\n".db_error($conn);
@@ -1322,11 +1277,7 @@ function admin_panel($usr, $func, $proto)
                                             echo "Failed to update URL [$id_esc] status on Client ($client_get).<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                                         }
                                     }
-                                    ?>
-                                <script>
-                                    setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
-                                </script>
-                                    <?php
+                    uns_redirect('func=view_client&client='.$client_get, $page_timeout);
                                 }
                             break;
                         case "add_url_batch":
@@ -1368,11 +1319,7 @@ function admin_panel($usr, $func, $proto)
                             {
                                 echo "Added ($i) New URL for Client. (".htmlspecialchars($friendly['friendly'] ?? '', ENT_QUOTES).")<br />";
                                 if($skipped > 0){echo "Skipped ($skipped) blank line(s).<br />";}
-                                ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
-                    </script>
-                                <?php
+                    uns_redirect('func=view_client&client='.$client_get, $page_timeout);
                             }else
                             {
                                 echo "None Passed.... :-(";
@@ -1397,11 +1344,7 @@ function admin_panel($usr, $func, $proto)
                             if($stmt->execute([$urls_imp, $name, $details, $time]))
                             {
                                 echo "Saved List. (".htmlspecialchars((string)$name, ENT_QUOTES).")";
-                                ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
-                    </script>
-                                <?php
+                    uns_redirect('func=view_client&client='.$client_get, $page_timeout);
                             }else
                             {
                                 echo "Failed to save list....<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -1421,11 +1364,7 @@ function admin_panel($usr, $func, $proto)
                             if($stmt->execute([$urls_imp, $time, $saved]))
                             {
                                 echo "Updated List.";
-                                ?>
-                    <script>
-                        setTimeout("location.href = ' $proto.<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
-                    </script>
-                                <?php
+                    uns_redirect('func=view_client&client='.$client_get, $page_timeout);
                             }else
                             {
                                 echo "Failed to update list.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -1487,11 +1426,7 @@ function admin_panel($usr, $func, $proto)
                                             echo "Failed to Add URL<br />\r\n";
                                         }
                                     }
-                                    ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
-                    </script>
-                                    <?php
+                    uns_redirect('func=view_client&client='.$client_get, $page_timeout);
                                 }else
                                 {
                                     echo "Failed to truncate.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -1504,11 +1439,7 @@ function admin_panel($usr, $func, $proto)
                             if($stmt->execute([$id]))
                             {
                                 echo "Removed Saved List";
-                               ?>
-            <script>
-                setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
-            </script>
-                            <?php
+                    uns_redirect('func=view_client&client='.$client_get, $page_timeout);
                             }else
                             {
                                 echo "Failed to Removed Saved List.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -1564,11 +1495,7 @@ function admin_panel($usr, $func, $proto)
                     if($led_blink){emerg_blink($toggle);}
                     if($toggle){echo "Enabled";}else{echo "Disabled";}
                     echo " Global Emergency Messages";
-                    ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=edit_emerg'",<?php echo $page_timeout;?>);
-                    </script>
-                    <?php
+                    uns_redirect('func=edit_emerg', $page_timeout);
                 }else
                 {
                     echo "Failed to ";
@@ -1587,11 +1514,7 @@ function admin_panel($usr, $func, $proto)
                 {
                     if(!@$_POST['urls'])
                     {
-                        ?>
-                        <script>
-                            setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=edit_emerg'",<?php echo $page_timeout;?>);
-                        </script>
-                        <?php
+                    uns_redirect('func=edit_emerg', $page_timeout);
                         break;
                     }
                     foreach($_POST['urls'] as $key=>$id)
@@ -1602,11 +1525,7 @@ function admin_panel($usr, $func, $proto)
                         if($stmt->execute([$url_t, $id]))
                         {
                             echo "Updated URL [$id].<br />";
-                            ?>
-                            <script>
-                                setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=edit_emerg'",<?php echo $page_timeout;?>);
-                            </script>
-                            <?php
+                    uns_redirect('func=edit_emerg', $page_timeout);
                         }else
                         {
                             echo "Failed to updated URL [$id].<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -1616,11 +1535,7 @@ function admin_panel($usr, $func, $proto)
                 {
                     if(!@$_POST['urls'])
                     {
-                        ?>
-                        <script>
-                            setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=edit_emerg'",<?php echo $page_timeout;?>);
-                        </script>
-                        <?php
+                    uns_redirect('func=edit_emerg', $page_timeout);
                         break;
                     }
                     foreach($_POST['urls'] as $key=>$id)
@@ -1630,11 +1545,7 @@ function admin_panel($usr, $func, $proto)
                         if($stmt->execute([$id]))
                         {
                             echo "Removed [$id].<br />";
-                            ?>
-                            <script>
-                                setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=edit_emerg'",<?php echo $page_timeout;?>);
-                            </script>
-                            <?php
+                    uns_redirect('func=edit_emerg', $page_timeout);
                         }else
                         {
                             echo "Failed to Remove [$id].<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -1650,11 +1561,7 @@ function admin_panel($usr, $func, $proto)
                         if($stmt->execute([$refresh, $id]))
                         {
                             echo "Updated URL [$id] Refresh Time.";
-                            ?>
-                            <script>
-                                setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=edit_emerg'",<?php echo $page_timeout;?>);
-                            </script>
-                            <?php
+                    uns_redirect('func=edit_emerg', $page_timeout);
                         }else
                         {
                             echo "Failed to updated URL [$id] status<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -1689,11 +1596,7 @@ function admin_panel($usr, $func, $proto)
                 if($i > 0)
                 {
                     echo "Added ($i) New Emergency URL's<br />";
-                    ?>
-        <script>
-            setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=edit_emerg'",<?php echo $page_timeout;?>);
-        </script>
-                    <?php
+                    uns_redirect('func=edit_emerg', $page_timeout);
                 }else
                 {
                     echo "None Passed.... :-(";
@@ -1713,11 +1616,7 @@ function admin_panel($usr, $func, $proto)
                 if($stmt->execute([$client_name, $client_id]))
                 {
                     echo "Renamed Client [$client_id] ".htmlspecialchars((string)$client_name, ENT_QUOTES).".";
-                    ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
-                    </script>
-                    <?php
+                    uns_redirect('func=view_client&client='.$client_get, $page_timeout);
                 }else
                 {
                     echo "Failed to Rename Client [$client_id]<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -1734,11 +1633,7 @@ function admin_panel($usr, $func, $proto)
             if($stmt->execute([$led_id, $cl_id]))
             {
                 echo "Updated LED Group to #$led_id<br/>";
-                ?>
-                <script>
-                    setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_client&client=<?php echo $cl_id;?>'",<?php echo $page_timeout;?>);
-                </script>
-                <?php
+                    uns_redirect('func=view_client&client='.$cl_id, $page_timeout);
             }else
             {
                 echo "failed update<br/>";
@@ -1854,11 +1749,7 @@ function admin_panel($usr, $func, $proto)
                 if($stmt->execute([$id]))
                 {
                     echo "Removed Archived List";
-                   ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
-                    </script>
-                <?php
+                    uns_redirect('func=view_client&client='.$client_get, $page_timeout);
                 }else
                 {
                     echo "Failed to Removed Archived List.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -1888,11 +1779,7 @@ function admin_panel($usr, $func, $proto)
                         if(db_create_links_table($conn, $driver, $client_ID."_links"))
                         {
                             echo "Created link table for `$friendly_esc`<br />";
-                            ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php'",<?php echo $page_timeout;?>);
-                    </script>
-                            <?php
+                    uns_redirect('', $page_timeout);
                         }else
                         {
                             echo "Failed to create link table for `$friendly_esc`<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -1995,11 +1882,7 @@ function admin_panel($usr, $func, $proto)
                 {
                     echo "Not removing <b>".htmlspecialchars($array1['username'], ENT_QUOTES)."</b>: it is the only"
                         ." account that can log in and manage users, so removing it would lock you out.";
-                    ?>
-            <script>
-                setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",4000);
-            </script>
-                    <?php
+                    uns_redirect('func=view_users', 4000);
                     break;
                 }
 
@@ -2012,11 +1895,7 @@ function admin_panel($usr, $func, $proto)
                         if($del_stmt2->execute([$array1['username']]))
                         {
                             echo "Removed Internal user.";
-                            ?>
-                            <script>
-                                setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-                            </script>
-                            <?php
+                    uns_redirect('func=view_users', $page_timeout);
                         }else
                         {
                             echo "Failed to Remove Internal User.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -2025,11 +1904,7 @@ function admin_panel($usr, $func, $proto)
                     }else
                     {
                         echo "Removed User.";
-                        ?>
-                        <script>
-                            setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-                        </script>
-                        <?php
+                    uns_redirect('func=view_users', $page_timeout);
                     }
                 }else
                 {
@@ -2057,11 +1932,7 @@ function admin_panel($usr, $func, $proto)
                         echo "Not disabling the built-in admin: it is the only account that can log in and manage users,"
                             ." so this would lock you out. Add another user, grant them <b>Edit Users</b>, check they can"
                             ." sign in, then disable this account.";
-                        ?>
-            <script>
-                setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",4000);
-            </script>
-                        <?php
+                    uns_redirect('func=view_users', 4000);
                         break;
                     }
                 }
@@ -2071,11 +1942,7 @@ function admin_panel($usr, $func, $proto)
                 {
                     if($toggle_admin){echo "Disabled";}else{echo "Enabled";}
                     echo " Built in Admin";
-                    ?>
-            <script>
-                setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-            </script>
-                    <?php
+                    uns_redirect('func=view_users', $page_timeout);
                 }else
                 {
                     echo "Failed Update.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -2097,11 +1964,7 @@ function admin_panel($usr, $func, $proto)
                     if($stmt->execute([$user, $domain]))
                     {
                         echo "Added new User (".htmlspecialchars((string)$domain, ENT_QUOTES)."\\".htmlspecialchars((string)$user, ENT_QUOTES).").";
-                        ?>
-                      <script>
-                            setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-                        </script>
-                        <?php
+                    uns_redirect('func=view_users', $page_timeout);
                     }else
                     {
                         echo "Failed to add new User.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -2117,11 +1980,7 @@ function admin_panel($usr, $func, $proto)
                         if($stmt2->execute([$user, $pwd_hash]))
                         {
                             echo "Added new Internal User (".htmlspecialchars((string)$user, ENT_QUOTES).").";
-                            ?>
-                           <script>
-                                setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-                            </script>
-                            <?php
+                    uns_redirect('func=view_users', $page_timeout);
                         }else
                         {
                             echo "Failed to add new User.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -2168,11 +2027,7 @@ function admin_panel($usr, $func, $proto)
                         {
                             echo "Not removing <b>Edit Users</b> from <b>".htmlspecialchars($tgt['username'], ENT_QUOTES)."</b>:"
                                 ." it is the only account that can log in and manage users, so nobody could grant it back.";
-                            ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",4000);
-                    </script>
-                            <?php
+                    uns_redirect('func=view_users', 4000);
                             break;
                         }
                     }
@@ -2181,11 +2036,7 @@ function admin_panel($usr, $func, $proto)
                     if($stmt->execute([$value, $id]))
                     {
                         echo "Updated $label field.";
-                        ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-                    </script>
-                            <?php
+                    uns_redirect('func=view_users', $page_timeout);
                     }else
                     {
                         echo "Failed Update.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -2198,11 +2049,7 @@ function admin_panel($usr, $func, $proto)
                     if($stmt->execute([$r_pwd, $id]))
                     {
                         echo "Changed User Password.";
-                        ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-                    </script>
-                            <?php
+                    uns_redirect('func=view_users', $page_timeout);
                     }else
                     {
                         echo "Failed to Update User Password.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
@@ -2218,11 +2065,7 @@ function admin_panel($usr, $func, $proto)
             {
                 if(!@$_POST['remove'])
                 {
-                    ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php'",<?php echo $page_timeout;?>);
-                    </script>
-                    <?php
+                    uns_redirect('', $page_timeout);
                     break;
                 }
                 foreach($_POST['remove'] as $id)
@@ -2243,11 +2086,7 @@ function admin_panel($usr, $func, $proto)
                             if($conn->query("DROP TABLE ".$id."_links"))
                             {
                                 echo "Removed client [$id_esc]<br />\r\n";
-                                ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php'",<?php echo $page_timeout;?>);
-                    </script>
-                            <?php
+                    uns_redirect('', $page_timeout);
                             }else
                             {
                                 echo "Failed to drop table ".$id_esc."_links<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
