@@ -148,35 +148,56 @@ if($GET_login)
         # configs/vars.php. Older installs predate that setting, so fall back to the
         # original hardcoded name rather than locking anyone out on upgrade.
         if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
-        if(!$settings['built_in_admin'] && $usr == $admin_user)
+
+        # Previously this only ever authenticated the built-in admin: both branches tested
+        # "$usr == unsadmin", so any other internal user created from the admin panel fell
+        # through to a blank page and could never log in - even though the Add User form
+        # collects a password and stores a hash for them. Any account that exists in both
+        # allowed_users and internal_users and is not disabled can now log in.
+        if($usr == $admin_user && $settings['built_in_admin'])
         {
-            $stmt = $conn->prepare("SELECT username,password FROM internal_users where username = ?");
+            # The built-in account has its own on/off switch on the user permissions page.
+            login_form("User is Disabled.");
+        }
+        else
+        {
+            $stmt = $conn->prepare("SELECT username,password,disabled FROM internal_users where username = ?");
             $stmt->execute([$usr]);
             $array = $stmt->fetch(PDO::FETCH_ASSOC);
-            $stored_pwd = $array['password'] ?? '';
-            $valid = false;
-            if($stored_pwd !== '' && password_get_info($stored_pwd)['algo'] !== null)
-            {
-                # modern password_hash() format
-                $valid = password_verify($pwd, $stored_pwd);
-            }elseif($stored_pwd !== '' && hash_equals($stored_pwd, md5($pwd.$seed)))
-            {
-                # legacy md5(password.seed) format - accept it, then opportunistically upgrade
-                $valid = true;
-                $new_hash = password_hash($pwd, PASSWORD_DEFAULT);
-                $upd_stmt = $conn->prepare("UPDATE internal_users SET password = ? WHERE username = ?");
-                $upd_stmt->execute([$new_hash, $usr]);
-            }
-            if($valid)
-            {
-                if($cook = create_cookie($array['username']))
-                {echo "Logged In!";}else{login_form("cookie failed: ".$cook);}
-            }
-            else{login_form("Login Failed.");}
 
-        }elseif($settings['built_in_admin'] && $usr == $admin_user)
-        {
-            login_form("User is Disabled.");
+            if(!$array)
+            {
+                # Listed in allowed_users but with no internal password - an LDAP-only
+                # account being tried while LDAP is off.
+                login_form("Login Failed.");
+            }
+            elseif(!empty($array['disabled']))
+            {
+                login_form("User is Disabled.");
+            }
+            else
+            {
+                $stored_pwd = $array['password'] ?? '';
+                $valid = false;
+                if($stored_pwd !== '' && password_get_info($stored_pwd)['algo'] !== null)
+                {
+                    # modern password_hash() format
+                    $valid = password_verify($pwd, $stored_pwd);
+                }elseif($stored_pwd !== '' && hash_equals($stored_pwd, md5($pwd.$seed)))
+                {
+                    # legacy md5(password.seed) format - accept it, then opportunistically upgrade
+                    $valid = true;
+                    $new_hash = password_hash($pwd, PASSWORD_DEFAULT);
+                    $upd_stmt = $conn->prepare("UPDATE internal_users SET password = ? WHERE username = ?");
+                    $upd_stmt->execute([$new_hash, $usr]);
+                }
+                if($valid)
+                {
+                    if($cook = create_cookie($array['username']))
+                    {echo "Logged In!";}else{login_form("cookie failed: ".$cook);}
+                }
+                else{login_form("Login Failed.");}
+            }
         }
     }else
     {
@@ -2771,6 +2792,28 @@ function admin_panel($usr, $func, $proto)
                     </tr>
                     <?php
                     if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
+                    # The built-in admin is kept out of the list below because its row has no
+                    # editable permissions and must not be removable. It is still shown, as its
+                    # own row, so the account is not invisible on the page that manages users.
+                    $bia_stmt = $conn->query("SELECT built_in_admin FROM settings");
+                    $bia_row = $bia_stmt ? $bia_stmt->fetch(PDO::FETCH_ASSOC) : false;
+                    $bia_off = !empty($bia_row['built_in_admin']);
+                    ?>
+                    <tr class="client_table_body">
+                        <td align="Center">
+                            <b><?php echo htmlspecialchars($admin_user, ENT_QUOTES);?></b>
+                            <br /><font size="1">built-in admin</font>
+                        </td>
+                        <td align="Center"><font size="1">set at install; use "Reset Admin Password" below</font></td>
+                        <td align="Center">Full access</td>
+                        <td align="Center">
+                            <?php echo $bia_off
+                                ? "<font color='red'>Disabled</font>"
+                                : "<font color='green'>Enabled</font>";?>
+                            <br /><font size="1">use the button below to change</font>
+                        </td>
+                    </tr>
+                    <?php
                     $au_stmt = $conn->prepare("SELECT * FROM allowed_users WHERE username != ?");
                     $au_stmt->execute([$admin_user]);
                     $allowed_users_all = $au_stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -2945,8 +2988,16 @@ function admin_panel($usr, $func, $proto)
                                         $result = $conn->query("SELECT * FROM settings");
                                         $array1 = $result->fetch(PDO::FETCH_ASSOC);
                                         ?>
-                                            <input type="hidden" name="toggle_admin" value="<?php if($array1['built_in_admin']){echo "0";}else{echo "1";}?>"/>
-                                            <input type="submit" value="<?php if($array1['built_in_admin']){echo "Disable";}else{echo "Enable";}?> Built in Admin" />
+                                            <?php
+                                            # built_in_admin is a "disabled" flag: 1 means the
+                                            # built-in account cannot log in. The button used to be
+                                            # labelled from that flag directly, so it read "Enable"
+                                            # while the account was working - and pressing it
+                                            # disabled the account you were logged in as.
+                                            $bia_disabled = !empty($array1['built_in_admin']);
+                                            ?>
+                                            <input type="hidden" name="toggle_admin" value="<?php echo $bia_disabled ? "0" : "1";?>"/>
+                                            <input type="submit" value="<?php echo $bia_disabled ? "Enable" : "Disable";?> Built in Admin" />
                                         </form>
                                     </td>
                                 </tr>
@@ -3008,6 +3059,33 @@ function admin_panel($usr, $func, $proto)
             if($perms['edit_users'])
             {
                 $toggle_admin = (int)filter_input(INPUT_POST, 'toggle_admin', FILTER_SANITIZE_SPECIAL_CHARS);
+
+                # Refuse to switch the built-in account off unless some other account can
+                # actually log in, otherwise this button locks everyone out of the admin
+                # panel with no way back in short of editing the database by hand. LDAP
+                # counts, since those accounts authenticate without an internal_users row.
+                if($toggle_admin)
+                {
+                    if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
+                    $others = 0;
+                    $o_stmt = $conn->prepare(
+                        "SELECT COUNT(*) FROM allowed_users a
+                         INNER JOIN internal_users i ON i.username = a.username
+                         WHERE a.username != ? AND i.disabled = 0");
+                    if($o_stmt->execute([$admin_user])){$others = (int)$o_stmt->fetchColumn();}
+                    if(!$LDAP && $others === 0)
+                    {
+                        echo "Not disabling the built-in admin: no other account can log in yet, so this would lock you out."
+                            ." Add an internal user (and check they can sign in) or enable LDAP first.";
+                        ?>
+            <script>
+                setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",4000);
+            </script>
+                        <?php
+                        break;
+                    }
+                }
+
                 $stmt = $conn->prepare("UPDATE settings SET built_in_admin = ? WHERE id = 1");
                 if($stmt->execute([$toggle_admin]))
                 {
