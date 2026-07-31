@@ -61,6 +61,24 @@
                                         </td>
                                     </tr>
                                     <tr>
+                                        <td class="verhead" id="3">
+                                            v3.0.0 (2026-07-31)
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td class="MenuLinks">
+                                            <ul>
+                                                <li class="style1">Pages are rendered with Smarty templates instead of HTML built inside PHP, and output is escaped by default</li>
+                                                <li class="style1">Runs on PHP 7.4 through 8.x</li>
+                                                <li class="style1">New emergency alert monitor (Scripts/EmergencyMonitor) that understands CAP as well as RSS, runs on any platform, and can publish the alert text straight to displays. Replaces the Windows-only Rave RSS task.</li>
+                                                <li class="style1">Emergency monitor settings are configured from UNS Options and stored in the database</li>
+                                                <li class="style1">Installer hardening: it checks everything it needs up front, keeps the database and template cache out of the web root where possible, and creates the database and admin accounts with randomised names and passwords</li>
+                                                <li class="style1">Any internal user can now log in, the built-in admin account name is configurable, and you can no longer lock yourself out by removing or disabling the last administrator</li>
+                                                <li class="style1">Fixed custom message wrapper flags being applied to the wrong message, an options page that could not be saved on SQLite, and a number of smaller bugs</li>
+                                            </ul>
+                                        </td>
+                                    </tr>
+                                    <tr>
                                         <td class="verhead" id="2">
                                             v2.0.0 (2026-07-31)
                                         </td>
@@ -68,7 +86,7 @@
                                     <tr>
                                         <td class="MenuLinks">
                                             <ul>
-                                                <li class="style1">Runs on PHP 7.4 through 8.x (was written for PHP 5)</li>
+                                                <li class="style1">PHP 8 compatibility (was written for PHP 5)</li>
                                                 <li class="style1">Security hardening: SQL queries converted to prepared statements, a session-cookie privilege-escalation bug fixed, command injection and arbitrary file write fixed in the DB backup/restore feature, and passwords upgraded from md5() to password_hash()</li>
                                                 <li class="style1">Database portability: MySQL, Microsoft SQL Server, and SQLite are all supported via PDO, selectable during install</li>
                                                 <li class="style1">Chrome extension modernized to Manifest V3</li>
