@@ -652,12 +652,8 @@ function admin_panel($usr, $func, $proto)
                 ."\$lpt_set_app    = ".var_export($lpt_binary, true)."; # Bin for the LPT LED blinker\n"
                 ."\$led_blink      = $leds; # Variable to turn on the LPT LED blinking\n"
                 ."\$mysql_dump_bin = ".var_export($mysql_dump_binary, true)."; # Name or location of the mysqldump binary\n"
-                ."\n# The Template variables for RSS feeds\n"
-                ."\$template_head_rss = ".var_export($template_head_rss, true).";\n"
-                ."\$template_foot_rss = ".var_export($template_foot_rss, true).";\n"
-                ."\n# The Template variables for Custom Messages\n"
-                ."\$template_head_cmsg = ".var_export($template_head_cmsg, true).";\n"
-                ."\$template_foot_cmsg = ".var_export($template_foot_cmsg, true).";\n";
+                ."
+";
             $cwd = str_replace("admin","",getcwd());
 
             if($fp = fopen($cwd."configs/vars.php", 'w+'))
@@ -1232,102 +1228,28 @@ function admin_panel($usr, $func, $proto)
                                 break;
                             }
                             if(@$_POST['copy2'])
-                                {
-                                    ?>
-                    <form name="client_copy" action="?func=edit_urls&client=<?php echo $client_get;?>&cl_func=copy2_proc" method="POST">
-                    <table>
-                        <tr>
-                            <th>Choose Clients to Copy URLs to:</th>
-                        </tr>
-                        <tr>
-                            <td>
-                                <select name="copy_clients[]" style="width:100%;" size="10" multiple="multiple">
-                            <?php
-                            $stmt = $conn->prepare("SELECT * FROM friendly where client != ?");
-                            $stmt->execute([$client_get]);
-                            $result = $stmt;
-                            while($all_clients = $result->fetch(PDO::FETCH_ASSOC))
                             {
-                                ?><option value="<?php echo htmlspecialchars($all_clients['client'], ENT_QUOTES);?>"><?php echo htmlspecialchars($all_clients['friendly'], ENT_QUOTES);?></option><?php
+                                $cl_stmt = $conn->prepare("SELECT * FROM friendly where client != ?");
+                                $cl_stmt->execute([$client_get]);
+                                $other_clients = $cl_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                                $cu = uns_smarty();
+                                $cu->assign('client_id', $client_get);
+                                $cu->assign('clients', $other_clients);
+                                $cu->assign('urls_imp', implode("|", $_POST['urls']));
+                                echo $cu->fetch('screens/copy_urls.tpl');
                             }
-                            $urls_imp = htmlspecialchars(implode("|", $_POST['urls']), ENT_QUOTES);
-                            ?>
-                                </select>
-                                <input type="hidden" name="urls" value="<?php echo $urls_imp; ?>">
-                            </td>
-                        </tr>
-                        <tr>
-                            <td align="center">
-                                <input type='submit' name="submit" value='submit'>
-                            </td>
-                        </tr>
-                    </table>
-                    </form>
-                            <?php
-                                }
-                                if(@$_POST['save_list'])
-                                {
-                                    $urls_imp = implode("|", $_POST['urls']);
-                                    ?>
-                    <form name="save_new" action="?func=edit_urls&client=<?php echo $client_get;?>&cl_func=save_new" method="POST">
-                    <table>
-                        <tr>
-                            <th>Save to List:</th>
-                        </tr>
-                        <tr>
-                            <td valign="center">
-                                Name:
-                            </td>
-                            <td>
-                                <input type="text" name="name" value="">
-                                <input type="hidden" name="urls" value="<?php echo $urls_imp; ?>">
-                            </td>
-                        </tr>
-                        <tr>
-                            <td valign="center">
-                                Details:
-                            </td>
-                            <td>
-                                <textarea name="details" cols="40" rows="10"></textarea>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td align="center">
-                                <input type='submit' name="submit" value='submit'>
-                            </td>
-                        </tr>
-                    </table>
-                        <hr />
-                    </form>
-                    <form name="save_append" action="?func=edit_urls&client=<?php echo $client_get;?>&cl_func=save_append" method="POST">
-                    <table>
-                        <tr>
-                            <th>Append to List:</th>
-                        </tr>
-                        <tr>
-                            <td>
-                                <select name="saved" style="width:100%;" size="10">
-                            <?php
-                            $result = $conn->query("SELECT * FROM saved_lists");
-                            while($all_clients = $result->fetch(PDO::FETCH_ASSOC))
+                            if(@$_POST['save_list'])
                             {
-                                ?><option value="<?php echo (int)$all_clients['id'];?>"><?php echo htmlspecialchars($all_clients['name'], ENT_QUOTES);?></option><?php
+                                $sl_stmt = $conn->query("SELECT id,name FROM saved_lists");
+                                $existing_lists = $sl_stmt ? $sl_stmt->fetchAll(PDO::FETCH_ASSOC) : array();
+
+                                $su = uns_smarty();
+                                $su->assign('client_id', $client_get);
+                                $su->assign('saved_lists', $existing_lists);
+                                $su->assign('urls_imp', implode("|", $_POST['urls']));
+                                echo $su->fetch('screens/save_urls.tpl');
                             }
-                            $urls_imp = htmlspecialchars(implode("|", $_POST['urls']), ENT_QUOTES);
-                            ?>
-                                </select>
-                                <input type="hidden" name="urls" value="<?php echo $urls_imp; ?>">
-                            </td>
-                        </tr>
-                        <tr>
-                            <td align="center">
-                                <input type='submit' name="submit" value='submit'>
-                            </td>
-                        </tr>
-                    </table>
-                    </form>
-                            <?php
-                                }
                                 if(@$_POST['remove'])
                                 {
                                     $urls = array();

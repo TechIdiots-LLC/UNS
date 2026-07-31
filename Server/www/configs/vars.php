@@ -18,48 +18,4 @@ $lpt_read_app   = ''; 									# Bin for LPT value reader
 $led_blink      = 0;                         			# Variable to turn on the LPT LED blinking
 $mysql_dump_bin = 'mysqldump';							# Name or location of the mysqldump binary, used by the admin backup/restore feature
 
-# The Template variables for RSS feeds
-$template_head_rss = '<html>
-    <head>
-		<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-        <title>Powered by UNS</title>
-        <link rel="stylesheet" href="../configs/rss_styles.css">
-    </head>
-    <body class="body">';
-$template_foot_rss = '
-    </body>
-</html>';
-
-
-# The Template variables for Custom Messages
-$template_head_cmsg = '<html>
-	<head>
-		<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-		<title>Powered by UNS</title>
-		<link rel="stylesheet" href="../configs/cmsg_styles.css">
-	</head>
-	<body style="background-color: #C0C0C0">
-		<table style="width: 80%; height: 100%;" align="center">
-			<tr>
-				<td class="cmsgheader" style="height: 67px">
-					<img alt="Logo" src="../html/logo.png" width="462" height="70">
-				</td>
-			</tr>
-			<tr class="InfoCell">
-				<td valign="top"><br>
-					<table style="width: 80%" align="center">
-						<tr>
-							<td>';
-$template_foot_cmsg = 
-'							</td>
-
-						</tr>
-					</table>
-
-				</td>
-			</tr>
-		</table>
-	</body>
-</html>';
-
 ?>

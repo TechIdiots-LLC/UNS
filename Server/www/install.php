@@ -486,12 +486,8 @@ if($installing)
         ."\$lpt_read_app   = ''; # Bin for LPT value reader\n"
         ."\$led_blink      = 0; # Variable to turn on the LPT LED blinking\n"
         ."\$mysql_dump_bin = 'mysqldump'; # Name or location of the mysqldump binary, used by the admin backup/restore feature\n"
-        ."\n# The Template variables for RSS feeds\n"
-        ."\$template_head_rss = '<html>\n    <head>\n        <meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n        <title>Powered by UNS</title>\n        <link rel=\"stylesheet\" href=\"../configs/rss_styles.css\">\n    </head>\n    <body class=\"body\">';\n"
-        ."\$template_foot_rss = '\n    </body>\n</html>';\n"
-        ."\n# The Template variables for Custom Messages\n"
-        ."\$template_head_cmsg = '<html>\n\t<head>\n\t\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\n\t\t<title>Powered by UNS</title>\n\t\t<link rel=\"stylesheet\" href=\"../configs/cmsg_styles.css\">\n\t</head>\n\t<body style=\"background-color: #C0C0C0\">\n\t\t<table style=\"width: 80%; height: 100%;\" align=\"center\">\n\t\t\t<tr>\n\t\t\t\t<td class=\"cmsgheader\" style=\"height: 67px\">\n\t\t\t\t\t<img alt=\"Logo\" src=\"../html/logo.png\" width=\"462\" height=\"70\">\n\t\t\t\t</td>\n\t\t\t</tr>\n\t\t\t<tr class=\"InfoCell\">\n\t\t\t\t<td valign=\"top\"><br>\n\t\t\t\t\t<table style=\"width: 80%\" align=\"center\">\n\t\t\t\t\t\t<tr>\n\t\t\t\t\t\t\t<td>';\n"
-        ."\$template_foot_cmsg = '\t\t\t\t\t\t\t</td>\n\n\t\t\t\t\t\t</tr>\n\t\t\t\t\t</table>\n\n\t\t\t\t</td>\n\t\t\t</tr>\n\t\t</table>\n\t</body>\n</html>';\n";
+        ."
+";
 
     $conn_file = "<?php\n"
         ."\$driver = ".var_export($db_driver, true).";\n"

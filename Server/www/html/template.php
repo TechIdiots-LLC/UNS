@@ -29,8 +29,6 @@ $conn = db_connect($server, $username, $password, $db, $driver);
 switch($type)
 {
     case "rss":
-        $template_head = $template_head_rss;
-        $template_foot = $template_foot_rss;
         $stmt = $conn ? $conn->prepare("SELECT * FROM rss_feeds WHERE id = ?") : false;
         if($stmt && $stmt->execute([$ID]))
         {
@@ -60,8 +58,6 @@ switch($type)
         }
         break;
     case "c_message":
-        $template_head = $template_head_cmsg;
-        $template_foot = $template_foot_cmsg;
         $stmt = $conn ? $conn->prepare("SELECT * FROM c_messages WHERE id = ?") : false;
         if($stmt && $stmt->execute([$ID]))
         {
