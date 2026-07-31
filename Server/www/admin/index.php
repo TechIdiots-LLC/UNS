@@ -229,14 +229,6 @@ if(login_check())
     $cookie_user = $hash['username'] ?? null;
     if($ID !== null && $cookie_user !== null && time() < $hash['time'])
     {
-        ?>
-<html>
-    <head>
-        <title>UNS Admin Panel</title>
-        <link rel="stylesheet" href="../configs/styles.css">
-    </head>
-    <body class="main_body">
-        <?php
         $stmt = $conn->prepare("SELECT tz FROM allowed_users where username = ?");
         $stmt->execute([$cookie_user]);
         $tx_array = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -244,7 +236,20 @@ if(login_check())
         $tz_list = timezone_abbreviations_list();
         date_default_timezone_set($tz_list[$exp[0]][$exp[1]]["timezone_id"]);
         $func = filter_input(INPUT_GET, 'func', FILTER_SANITIZE_SPECIAL_CHARS);
+
+        # The page shell is a template; the screens inside it are still PHP that echoes
+        # markup, so their output is buffered and handed to the template as the content
+        # block. That lets the shell move to Smarty now and the screens follow one at a
+        # time, instead of one enormous rewrite of a 3,700 line file.
+        ob_start();
         admin_panel($cookie_user, $func, $proto);
+        $panel_body = ob_get_clean();
+
+        $smarty = uns_smarty();
+        $smarty->assign('content', $panel_body);
+        $smarty->assign('footer_date', date("Y-m", filemtime('index.php')));
+        $smarty->display('admin_page.tpl');
+        die();
     }else
     {
         if($root == "" or $root == "/"){$path = "/admin";}else{$path = "/".$root."admin";}
@@ -259,29 +264,11 @@ if(login_check())
     }
 
 }
-?>
-        <div align="center">
-            <font size="1">
-                Powered by <a class="links" href="http://uns.techidiots.net/ver.htm#1">UNS v<?php
-                    # Prefer the VERSION file, which reflects the code actually deployed -
-                    # after an upgrade that is newer than the value vars.php recorded at
-                    # install time. $uns_ver is the fallback for deployments where VERSION
-                    # did not come along.
-                    $footer_ver = uns_version();
-                    if($footer_ver === 'unknown' && isset($uns_ver) && $uns_ver !== ''){$footer_ver = $uns_ver;}
-                    echo htmlspecialchars($footer_ver);
-                ?></a><br />
-                (
-                <!-- replace with final release date -->
-                <?php echo date("Y-m", filemtime('index.php'));?>
-                ) Phillip Ferland / Random Intervals,
-                Andrew Calcutt / TechIdiots LLC
-            </font>
-        </div>
-    </body>
-</html>
 
-<?php
+# The page shell, including this footer, is rendered from templates/admin_page.tpl
+# by the branch above, which exits when it is done. Nothing reaches here except the
+# session-timeout path, and login_form() exits too.
+
 
 function admin_panel($usr, $func, $proto)
 {
