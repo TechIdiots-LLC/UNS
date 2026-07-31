@@ -43,7 +43,11 @@
                         <td colspan="5">
                             <textarea name="body[]" rows="10" style="width:90%">{$m.body nofilter}</textarea>
                             <br />
-                            Use the UNS Wrapper? <input type="checkbox" name="wrapper[]" value="1"{if $m.wrapper} Checked{/if}/>
+                            {* Indexed explicitly, not "wrapper[]". An unticked checkbox is not
+                               submitted at all, so a bare wrapper[] arrives packed - tick only
+                               the second of three messages and it posts wrapper[0], applying
+                               the flag to the first message instead. *}
+                            Use the UNS Wrapper? <input type="checkbox" name="wrapper[{$m@index}]" value="1"{if $m.wrapper} Checked{/if}/>
                             <br />
                         </td>
                     </tr>

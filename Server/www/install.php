@@ -506,6 +506,31 @@ if($installing)
     if(file_put_contents(__DIR__.'/configs/conn.php', $conn_file) !== false){echo "<td class='Good'>Success</td></tr>";}
     else{echo "<td class='Emerg'>Failed to write configs/conn.php - check folder permissions.</td></tr>";}
 
+    # Create the template folders here, as the web server user, rather than leaving Smarty
+    # to make them on the first page load. Done lazily they can end up owned by whoever
+    # happened to trigger it, and the failure then surfaces as an uncaught Smarty error on
+    # a page rather than as something the installer could have told you about.
+    echo "<tr><td>Create template cache folders.</td>";
+    $tpl_dirs = array('templates_c' => uns_data_dir('templates_c', true),
+                      'templates_cache' => uns_data_dir('templates_cache', true));
+    $tpl_bad = array();
+    foreach($tpl_dirs as $name => $dir)
+    {
+        if(!is_dir($dir) || !is_writable($dir)){$tpl_bad[$name] = $dir;}
+    }
+    if(!$tpl_bad)
+    {
+        echo "<td class='Good'>Success<br /><font size='1'>".htmlspecialchars(uns_path_for_shell($tpl_dirs['templates_c']), ENT_QUOTES)."</font></td></tr>";
+    }
+    else
+    {
+        $first = reset($tpl_bad);
+        echo "<td class='Emerg'>Could not create or write ".htmlspecialchars(uns_path_for_shell($first), ENT_QUOTES)
+            ."<br />Smarty compiles templates there on every page, so this must stay writable by "
+            .htmlspecialchars(uns_web_user(), ENT_QUOTES)."."
+            .uns_cmd_html(uns_cmd_make_writable($first, uns_web_user()))."</td></tr>";
+    }
+
     echo "</table>";
 
     # Post-install hardening. The installer needed write access to configs/ to create
@@ -564,6 +589,12 @@ if($installing)
     echo "<li><b>Restrict the credentials file.</b> configs/conn.php holds your database login"
         ." in plain text; it should be readable by the web server and nobody else."
         .uns_cmd_html(uns_cmd_restrict_file($raw_cfg.'/conn.php', $raw_user))."</li>";
+
+    echo "<li><b>Keep the template cache writable.</b> Smarty compiles templates into"
+        ." <b>".htmlspecialchars(uns_path_for_shell(uns_data_dir('templates_c')), ENT_QUOTES)."</b>"
+        ." on every page, so it must stay writable by <b>".$web_user."</b> - locking it down"
+        ." produces a Smarty error on the next page load."
+        .uns_cmd_html(uns_cmd_make_writable(uns_data_dir('templates_c'), $raw_user))."</li>";
 
     echo "<li><b>Retire the built-in admin.</b> Once you have added your own users, disable the"
         ." <b>".htmlspecialchars($admin_user, ENT_QUOTES)."</b> account from the admin panel's options page.</li>";

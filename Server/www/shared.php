@@ -232,6 +232,14 @@ function uns_data_dir($subdir = '', $create = false)
 
     $path = $base.'/'.$subdir;
     if($create && !is_dir($path)){@mkdir($path, 0750, true);}
+
+    # Guard the subfolder too, not just the base. When the base is configs/ - the fallback
+    # when nothing outside the web root is writable - it already carries a shipped
+    # .htaccess that only denies database files, and uns_write_dir_guards() will not
+    # replace it. Compiled Smarty templates are generated PHP, so without a rule of their
+    # own they would sit in the document root and be executable by direct request.
+    if($create && is_dir($path)){uns_write_dir_guards($path);}
+
     return $path;
 }
 
@@ -253,8 +261,32 @@ function uns_smarty()
 
     $smarty = new Smarty\Smarty();
     $smarty->setTemplateDir(__DIR__.'/templates');
-    $smarty->setCompileDir(uns_data_dir('templates_c', true));
-    $smarty->setCacheDir(uns_data_dir('templates_cache', true));
+
+    # Smarty throws an uncaught exception when it cannot write a compiled template, which
+    # reaches the browser as a bare fatal naming an internal Smarty file. Check first and
+    # say which folder is at fault and how to fix it, since this is always a permissions
+    # problem on the server rather than anything the page itself did wrong.
+    $compile_dir = uns_data_dir('templates_c', true);
+    $cache_dir   = uns_data_dir('templates_cache', true);
+    foreach(array('compiled templates' => $compile_dir, 'template cache' => $cache_dir) as $what => $dir)
+    {
+        if(is_dir($dir) && is_writable($dir)){continue;}
+        $user = function_exists('posix_geteuid') && function_exists('posix_getpwuid')
+            ? (posix_getpwuid(posix_geteuid())['name'] ?? 'the web server user')
+            : 'the web server user';
+        $shown = htmlspecialchars($dir, ENT_QUOTES);
+        die("<h3>UNS cannot write its ".$what."</h3>"
+            ."<p>PHP is running as <b>".htmlspecialchars($user, ENT_QUOTES)."</b> and needs to write to"
+            ." <b>".$shown."</b>"
+            .(is_dir($dir) ? ", which exists but is not writable." : ", which could not be created.")
+            ."</p><p>On a typical Linux server:</p>"
+            ."<pre>sudo mkdir -p '".$shown."'\n"
+            ."sudo chown -R ".htmlspecialchars($user, ENT_QUOTES)." '".$shown."'\n"
+            ."sudo chmod 750 '".$shown."'</pre>");
+    }
+
+    $smarty->setCompileDir($compile_dir);
+    $smarty->setCacheDir($cache_dir);
 
     # Caching is off: every page here is either per-request (an admin screen) or already
     # cheap (a client redirect). Compilation is still cached, which is where the win is.

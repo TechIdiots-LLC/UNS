@@ -985,7 +985,10 @@ function admin_panel($usr, $func, $proto)
                                 $body = htmlentities($body, ENT_QUOTES);
                                 $id = (int)$_POST['id'][$key];
                                 $name = $_POST['name'][$key];
-                                $wrapper = (int)$_POST['wrapper'][$key];
+                                # The checkbox is posted as wrapper[<row index>], so an unticked
+                                # box is simply missing rather than shifting every later value
+                                # up one row. Missing means off.
+                                $wrapper = !empty($_POST['wrapper'][$key]) ? 1 : 0;
                                 $stmt = $conn->prepare("UPDATE c_messages SET name = ?, body = ?, wrapper = ? WHERE id = ?");
                                 $name_esc = htmlspecialchars((string)$name, ENT_QUOTES);
                                 if($stmt->execute([$name, $body, $wrapper, $id]))
