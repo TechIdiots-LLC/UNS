@@ -44,6 +44,276 @@ function is_safe_user_host($value)
     return is_string($value) && preg_match('/^[A-Za-z0-9_.%-]{1,128}$/', $value) === 1;
 }
 
+function uns_is_windows()
+{
+    return PHP_OS_FAMILY === 'Windows';
+}
+
+# Short random hex token, used to make guessable defaults (the SQL account name, and a
+# SQLite filename that had to stay in the web root) unguessable instead.
+function uns_random_token($bytes = 4)
+{
+    return bin2hex(random_bytes($bytes));
+}
+
+# Strong random password for the UNS database account. No human ever types this one - it
+# is written into configs/conn.php and used by PHP from then on - so it can be long and
+# random at no usability cost. The alphabet deliberately leaves out quotes, backslashes
+# and dollar signs so the value is safe to embed both in SQL (CREATE USER ... IDENTIFIED
+# BY / CREATE LOGIN ... WITH PASSWORD) and in the generated PHP config file.
+function uns_random_password($length = 24)
+{
+    $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#%*+-=?@^_';
+    $max = strlen($alphabet) - 1;
+    $out = '';
+    for($i = 0; $i < $length; $i++){$out .= $alphabet[random_int(0, $max)];}
+    return $out;
+}
+
+# Best-effort "who is PHP actually running as", so the installer can print a permissions
+# command that is correct for this box instead of guessing www-data.
+function uns_web_user()
+{
+    # Linux/Apache: the real effective user, when the posix extension is available.
+    if(function_exists('posix_geteuid') && function_exists('posix_getpwuid'))
+    {
+        $info = posix_getpwuid(posix_geteuid());
+        if(!empty($info['name'])){return $info['name'];}
+    }
+    $env = getenv('APACHE_RUN_USER');
+    if($env !== false && $env !== ''){return $env;}
+
+    # Windows/IIS: FastCGI runs as the application pool identity, which surfaces in
+    # USERNAME. get_current_user() would report the owner of this file instead, which is
+    # usually not the identity that needs the permissions.
+    if(uns_is_windows())
+    {
+        $u = getenv('USERNAME');
+        if($u !== false && $u !== '')
+        {
+            $domain = getenv('USERDOMAIN');
+            return ($domain !== false && $domain !== '') ? $domain."\\".$u : $u;
+        }
+        return 'IIS APPPOOL\\<your app pool>';
+    }
+
+    $user = get_current_user();
+    return $user !== '' ? $user : 'the web server user';
+}
+
+# Permission commands are completely different on Linux/Apache vs Windows/IIS, so emit
+# whichever suits the server actually running this installer. Paths are normalised to
+# the separator that server's shell expects.
+function uns_path_for_shell($path)
+{
+    $p = str_replace('\\', '/', $path);
+    return uns_is_windows() ? str_replace('/', '\\', $p) : $p;
+}
+
+function uns_cmd_delete($path)
+{
+    $p = uns_path_for_shell($path);
+    return uns_is_windows() ? "del \"".$p."\"" : "sudo rm '".$p."'";
+}
+
+function uns_cmd_make_writable($dir, $user)
+{
+    $p = uns_path_for_shell($dir);
+    if(uns_is_windows()){return "icacls \"".$p."\" /grant \"".$user.":(OI)(CI)M\"";}
+    return "sudo chown -R ".$user." '".$p."'\nsudo chmod 750 '".$p."'";
+}
+
+function uns_cmd_make_readonly($dir, $user)
+{
+    $p = uns_path_for_shell($dir);
+    if(uns_is_windows()){return "icacls \"".$p."\" /inheritance:r /grant \"".$user.":(OI)(CI)RX\" /grant \"Administrators:(OI)(CI)F\"";}
+    return "sudo chmod 550 '".$p."'";
+}
+
+function uns_cmd_restrict_file($file, $user)
+{
+    $p = uns_path_for_shell($file);
+    if(uns_is_windows()){return "icacls \"".$p."\" /inheritance:r /grant \"".$user.":R\" /grant \"Administrators:F\"";}
+    return "sudo chown ".$user." '".$p."'\nsudo chmod 640 '".$p."'";
+}
+
+# Renders a possibly multi-line command block as escaped <code> lines.
+function uns_cmd_html($cmd)
+{
+    $out = '';
+    foreach(explode("\n", $cmd) as $line)
+    {
+        $out .= "<br /><code>".htmlspecialchars($line, ENT_QUOTES)."</code>";
+    }
+    return $out;
+}
+
+# Returns '' when the installer can genuinely write both config files, otherwise a short
+# explanation of what is in the way.
+#
+# Checking is_writable() on the folder alone is not enough, and getting this wrong is what
+# let an install get half-finished: vars.php and conn.php are tracked files that already
+# exist in a fresh checkout, and overwriting an existing file needs write permission on
+# that FILE. A folder the web server can add to (so creating the SQLite database succeeds)
+# can still hold config files it cannot replace.
+function uns_config_write_problem()
+{
+    $dir = __DIR__.'/configs';
+    if(!is_dir($dir)){return "the configs/ folder does not exist";}
+    if(!is_writable($dir)){return "the configs/ folder is not writable";}
+    foreach(array('vars.php', 'conn.php') as $name)
+    {
+        $path = $dir.'/'.$name;
+        if(file_exists($path) && !is_writable($path)){return "configs/".$name." already exists and is not writable";}
+    }
+    return '';
+}
+
+# Shown whenever configs/ is not writable. The same advice applies whether we are
+# writing vars.php/conn.php or creating a SQLite database file in there.
+function uns_perm_hint($dir)
+{
+    $raw_user = uns_web_user();
+    $raw_dir  = rtrim($dir, '/\\');
+    $user = htmlspecialchars($raw_user, ENT_QUOTES);
+    $shown = htmlspecialchars(uns_path_for_shell($raw_dir), ENT_QUOTES);
+    return "PHP is running as <b>".$user."</b> and cannot write to <b>".$shown."</b>."
+        ." Note that SQLite also creates -wal and -shm files next to the database, so the"
+        ." <i>folder</i> has to be writable - making just the .sqlite file writable is not enough."
+        ."<br />".(uns_is_windows() ? "In an elevated command prompt:" : "On a typical Linux server:")
+        .uns_cmd_html(uns_cmd_make_writable($raw_dir, $raw_user));
+}
+
+# True if $path resolves to somewhere under the web server's document root - ie. a file
+# placed there is potentially fetchable over HTTP. When the document root cannot be
+# determined we return true, so callers fall back to the location we know is protected.
+function uns_path_is_public($path)
+{
+    $docroot = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? ''));
+    if($docroot === false){return true;}
+
+    # The folder may not exist yet (we are often asked about it before creating it), and
+    # realpath() fails on a missing path - so resolve the nearest ancestor that does
+    # exist. A folder is inside the web root exactly when its parent chain is.
+    $probe = $path;
+    while(realpath($probe) === false)
+    {
+        $up = dirname($probe);
+        if($up === $probe){return true;}
+        $probe = $up;
+    }
+
+    $target  = rtrim(str_replace('\\', '/', realpath($probe)), '/').'/';
+    $docroot = rtrim(str_replace('\\', '/', $docroot), '/').'/';
+
+    # Windows paths are case-insensitive, and IIS's DOCUMENT_ROOT often differs in case
+    # from what realpath() returns. A case-sensitive compare would then report a folder
+    # that IS inside the web root as safe - the dangerous direction to get wrong.
+    if(uns_is_windows()){return stripos($target, $docroot) === 0;}
+    return strpos($target, $docroot) === 0;
+}
+
+# Where a SQLite database should live. Preference is a folder OUTSIDE the document root,
+# because a .sqlite file inside it can be downloaded over HTTP unless the web server is
+# configured to refuse - and that one file holds every password hash in the install.
+# Falls back to configs/ (which ships an .htaccess deny rule) only when there is no
+# usable location outside the web root. Pass $create=true to actually make the folder.
+function uns_sqlite_dir($create = false)
+{
+    $candidate = dirname(__DIR__).'/uns-data';
+    $parent    = dirname(__DIR__);
+
+    # Judge by the parent, which always exists, so this answers the same before and
+    # after the folder is created.
+    if(!uns_path_is_public($parent) && is_writable(is_dir($candidate) ? $candidate : $parent))
+    {
+        if($create && !is_dir($candidate)){@mkdir($candidate, 0750);}
+        if($create && is_dir($candidate)){uns_write_data_guards($candidate);}
+        if(!$create || is_dir($candidate)){return $candidate;}
+    }
+    return __DIR__.'/configs';
+}
+
+# Drop deny rules into the data folder for both supported web servers - Apache reads
+# .htaccess and ignores web.config, IIS does the exact opposite, so write both rather
+# than trying to guess which one will be in front of this folder later.
+#
+# This is belt-and-braces, not the actual protection. While the folder sits outside the
+# document root - which is the default - neither file does anything at all, because no
+# URL maps there. They earn their keep only if the server layout later changes (a vhost
+# or site re-pointed at the parent directory, an Alias/virtual directory added, the app
+# moved) and the folder quietly becomes reachable.
+function uns_write_data_guards($dir)
+{
+    $htaccess = $dir.'/.htaccess';
+    if(!file_exists($htaccess))
+    {
+        $rules = "# UNS data folder - nothing in here should ever be served over HTTP.\n"
+            ."#\n"
+            ."# NOTE: this file does nothing while the folder is outside the document root\n"
+            ."# (no URL maps here), and Apache ignores it entirely when the vhost sets\n"
+            ."# AllowOverride None. IIS and nginx never read .htaccess at all - see\n"
+            ."# web.config alongside this file for IIS. Treat these as a safety net for\n"
+            ."# later re-configuration, not as the primary protection.\n"
+            ."#\n"
+            ."# PHP reads the database through the filesystem, not over HTTP, so denying\n"
+            ."# everything here costs the application nothing.\n"
+            ."\n"
+            ."# Belt and braces: if the deny rules below are ignored (AllowOverride None),\n"
+            ."# at least do not hand out a directory listing of this folder.\n"
+            ."Options -Indexes\n"
+            ."\n"
+            ."<IfModule mod_authz_core.c>\n"
+            ."    # Apache 2.4+\n"
+            ."    Require all denied\n"
+            ."</IfModule>\n"
+            ."<IfModule !mod_authz_core.c>\n"
+            ."    # Apache 2.2\n"
+            ."    Order allow,deny\n"
+            ."    Deny from all\n"
+            ."</IfModule>\n";
+        @file_put_contents($htaccess, $rules);
+    }
+
+    $webconfig = $dir.'/web.config';
+    if(!file_exists($webconfig))
+    {
+        # allowUnlisted="false" denies every extension that is not explicitly allowed, and
+        # nothing is allowed here - a blanket deny rather than a blocklist, so an unforeseen
+        # name like uns.sqlite.bak cannot slip through. requestFiltering is part of the base
+        # IIS 7+ install, so this needs no extra role service. URL Authorization
+        # (<authorization>) would also work but returns a 500 when that role service is
+        # absent, which is a worse failure mode than the thing it protects against.
+        $xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            ."<!--\n"
+            ."    UNS data folder - nothing in here should ever be served over HTTP.\n"
+            ."    Does nothing while this folder is outside the site root; kept as a safety\n"
+            ."    net in case the site layout later changes. Apache uses .htaccess instead.\n"
+            ."\n"
+            ."    PHP reads the database through the filesystem, not over HTTP, so denying\n"
+            ."    everything here costs the application nothing.\n"
+            ."-->\n"
+            ."<configuration>\n"
+            ."    <system.webServer>\n"
+            ."        <directoryBrowse enabled=\"false\" />\n"
+            ."        <security>\n"
+            ."            <requestFiltering>\n"
+            ."                <fileExtensions allowUnlisted=\"false\" />\n"
+            ."            </requestFiltering>\n"
+            ."        </security>\n"
+            ."    </system.webServer>\n"
+            ."</configuration>\n";
+        @file_put_contents($webconfig, $xml);
+    }
+
+    # A directory index that works no matter what the server config says. If the deny rules
+    # above are ignored - AllowOverride None on Apache, or web.config overrides locked on
+    # IIS - a request for the folder still hits this empty file instead of listing the
+    # database. configs/ has carried an empty index.php for the same reason for years.
+    $index = $dir.'/index.php';
+    if(!file_exists($index)){@file_put_contents($index, "<?php # Intentionally blank - keeps this folder from being listed.\n");}
+}
+
 # Splits a schema file into individual statements. Neither mysqli's multi_query() nor
 # PDO have a portable "run this whole .sql file" call, and our schema files never put a
 # semicolon inside a string/value, so a plain split is safe here.
@@ -95,20 +365,77 @@ if($installing)
     $user_host = filter_input(INPUT_POST, 'sql_user_host', FILTER_SANITIZE_SPECIAL_CHARS);
     if($user_host === null || $user_host === false || $user_host === ""){$user_host = "localhost";}
 
+    # Validate anything that can abort the install BEFORE creating a database, a schema or
+    # a SQL account. This check used to sit further down, after the database and tables had
+    # already been built, so a missing admin password left an orphaned (and randomly named,
+    # therefore easy to overlook) .sqlite file behind on every failed attempt.
+    # Confirm the config files can actually be written before creating a database, a schema
+    # or a SQL account. Discovering this at the end left a working database and admin user
+    # behind with no config to reach them - and, with randomised SQLite names, a fresh
+    # orphaned .sqlite file on every retry.
+    $cfg_problem = uns_config_write_problem();
+    if($cfg_problem !== '')
+    {
+        $raw_cfg = __DIR__.'/configs';
+        die("<tr><td colspan='2' class='Emerg'>Cannot write the UNS config files: <b>".htmlspecialchars($cfg_problem, ENT_QUOTES)."</b>."
+            ."<br />PHP is running as <b>".htmlspecialchars(uns_web_user(), ENT_QUOTES)."</b>. Note that vars.php and conn.php"
+            ." ship with UNS, so they already exist - being able to add files to configs/ is not enough, the web server also"
+            ." needs to be able to replace those two files."
+            .uns_cmd_html(uns_cmd_make_writable($raw_cfg, uns_web_user()))
+            ."<br />Then submit again. <b>Nothing has been created</b>, so you can simply retry."
+            ."</td></tr></table></div></body></html>");
+    }
+
+    $admin_user = (string)filter_input(INPUT_POST, 'uns_admin_usr', FILTER_SANITIZE_SPECIAL_CHARS);
+    if($admin_user === ""){$admin_user = 'unsadmin';}
+    if(!is_safe_identifier($admin_user))
+    {
+        die("<tr><td colspan='2' class='Emerg'>The admin username may only contain letters, numbers and underscores."
+            ."<br />Nothing has been created, so you can simply retry.</td></tr></table></div></body></html>");
+    }
+
+    $admin_pwd = (string)filter_input(INPUT_POST, 'uns_admin_pwd', FILTER_UNSAFE_RAW);
+    if($admin_pwd === "")
+    {
+        die("<tr><td colspan='2' class='Emerg'>An <b>Internal Admin Password</b> is required - that is the"
+            ." account you log in to UNS with, and it is needed even when LDAP is enabled."
+            ." Go back, fill it in, and submit again.<br />Nothing has been created, so you can simply retry."
+            ."</td></tr></table></div></body></html>");
+    }
+
     if($db_driver === 'sqlite')
     {
-        # A single self-contained file under configs/ - no server, no separate DB user.
+        # A single self-contained file - no server, no separate DB user. Kept outside the
+        # document root where possible; see uns_sqlite_dir().
         $sqlite_name = filter_input(INPUT_POST, 'sqlite_name', FILTER_SANITIZE_SPECIAL_CHARS);
         if(!is_safe_identifier($sqlite_name)){$sqlite_name = 'uns';}
-        $db_name = __DIR__.'/configs/'.$sqlite_name.'.sqlite';
+        $sqlite_dir = uns_sqlite_dir(true);
+        # If we could not get out of the web root, the deny rules are the only thing between
+        # the internet and every password hash in the install - and Apache ignores .htaccess
+        # outright under AllowOverride None. Give the file an unguessable name so a direct
+        # request for the obvious /configs/uns.sqlite fails even when those rules are inert.
+        # Nothing needs to guess it: the real path is recorded in conn.php.
+        if(uns_path_is_public($sqlite_dir)){$sqlite_name .= '-'.uns_random_token(8);}
+        $db_name = $sqlite_dir.'/'.$sqlite_name.'.sqlite';
         $sql_host = '';
         $uns_sql_usr = '';
         $uns_sql_pwd = '';
 
         echo "<tr><td>Create UNS SQLite database.</td>";
         $conn = db_connect('', '', '', $db_name, 'sqlite');
-        if($conn){echo "<td class='Good'>Success</td></tr>";}
-        else{die("<td class='Emerg'>Could not create ".htmlspecialchars($db_name, ENT_QUOTES)."</td></tr></table></div></body></html>");}
+        if($conn)
+        {
+            echo "<td class='Good'>Success<br /><font size='1'>".htmlspecialchars($db_name, ENT_QUOTES)."</font>";
+            if(uns_path_is_public($sqlite_dir))
+            {
+                echo "<br /><font color='orange' size='1'>This is inside the web root, so the file name was given a"
+                    ." random suffix to make it unguessable, and configs/.htaccess (Apache) plus configs/web.config (IIS)"
+                    ." deny downloads. Be aware Apache ignores .htaccess entirely under <b>AllowOverride None</b>."
+                    ." Moving the database outside the web root is the only fix that does not depend on server config.</font>";
+            }
+            echo "</td></tr>";
+        }
+        else{die("<td class='Emerg'>Could not create ".htmlspecialchars($db_name, ENT_QUOTES)."<br />".uns_perm_hint($sqlite_dir)."</td></tr></table></div></body></html>");}
 
         echo "<tr><td>Create UNS tables.</td>";
         if(db_run_schema_file($conn, __DIR__.'/setup_sqlite.sql')){echo "<td class='Good'>Success</td></tr>";}
@@ -119,6 +446,12 @@ if($installing)
         if(!is_safe_identifier($db_name) || !is_safe_identifier($uns_sql_usr) || !is_safe_user_host($user_host))
         {
             die("<tr><td colspan='2' class='Emerg'>Database name / UNS SQL username / user host may only contain letters, numbers, and underscores.</td></tr></table></div></body></html>");
+        }
+        # MySQL caps account names at 32 characters. A longer name passes the identifier
+        # check above and then fails at CREATE USER with an opaque error, so catch it here.
+        if($db_driver === 'mysql' && strlen($uns_sql_usr) > 32)
+        {
+            die("<tr><td colspan='2' class='Emerg'>MySQL limits usernames to 32 characters (this one is ".strlen($uns_sql_usr).").</td></tr></table></div></body></html>");
         }
         if($uns_sql_pwd === "" || $sql_root_pwd === "")
         {
@@ -184,26 +517,37 @@ if($installing)
     # synced by the release workflow, which can lag between releases (they're
     # also run directly, without install.php, for manual installs). Overwrite it
     # here so anyone using install.php always gets the version they actually installed.
-    $conn->exec("UPDATE settings SET uns_ver = ".$conn->quote(uns_version()));
+    #
+    # Only when we genuinely know it, though: if VERSION is not reachable (a deploy of just
+    # the Server/www contents), uns_version() returns 'unknown', and writing that over the
+    # correct value seeded by the schema is how the admin footer ended up showing
+    # "vunknown". In that case keep the schema's value and read it back for vars.php.
+    $uns_ver = uns_version();
+    if($uns_ver !== 'unknown' && $uns_ver !== '')
+    {
+        $conn->exec("UPDATE settings SET uns_ver = ".$conn->quote($uns_ver));
+    }
+    else
+    {
+        $vstmt = $conn->query("SELECT uns_ver FROM settings");
+        $vrow  = $vstmt ? $vstmt->fetch(PDO::FETCH_ASSOC) : false;
+        if($vrow && !empty($vrow['uns_ver'])){$uns_ver = $vrow['uns_ver'];}
+    }
 
     $characters = '0123456789abcdefghijklmnopqrstuvwxyz';
     $seed = '';
     for($p = 0; $p < 32; $p++){$seed .= $characters[random_int(0, strlen($characters)-1)];}
-    $admin_pwd = (string)filter_input(INPUT_POST, 'uns_admin_pwd', FILTER_UNSAFE_RAW);
-    if($admin_pwd === "")
-    {
-        die("<tr><td colspan='2' class='Emerg'>An internal admin password is required.</td></tr></table></div></body></html>");
-    }
+    # $admin_pwd was read and validated up front, before anything was created.
     # New installs get a modern hash straight away; the $seed above is kept around only
     # because the admin options page still displays/rewrites it for older installs.
     $password_hash = password_hash($admin_pwd, PASSWORD_DEFAULT);
 
     echo "<tr><td>Create UNS internal admin user.</td>";
-    $stmt = $conn->prepare("INSERT INTO internal_users (username, password, disabled, failed) VALUES ('unsadmin', ?, 0, 0)");
-    if($stmt->execute([$password_hash]))
+    $stmt = $conn->prepare("INSERT INTO internal_users (username, password, disabled, failed) VALUES (?, ?, 0, 0)");
+    if($stmt->execute([$admin_user, $password_hash]))
     {
-        $stmt2 = $conn->prepare("INSERT INTO allowed_users (username, domain, edit_urls, edit_emerg, edit_users, edit_options, c_messages, rss_feeds) VALUES ('unsadmin', '', 1, 1, 1, 1, 1, 1)");
-        if($stmt2->execute()){echo "<td class='Good'>Success</td></tr>";}
+        $stmt2 = $conn->prepare("INSERT INTO allowed_users (username, domain, edit_urls, edit_emerg, edit_users, edit_options, c_messages, rss_feeds) VALUES (?, '', 1, 1, 1, 1, 1, 1)");
+        if($stmt2->execute([$admin_user])){echo "<td class='Good'>Success<br /><font size='1'>".htmlspecialchars($admin_user, ENT_QUOTES)."</font></td></tr>";}
         else{echo "<td class='Emerg'>".htmlspecialchars(db_error($stmt2), ENT_QUOTES)."</td></tr>";}
     }else
     {
@@ -216,7 +560,18 @@ if($installing)
     if($root !== ""){$root .= "/";}
     $timeout = (int)filter_input(INPUT_POST, 'timeout', FILTER_VALIDATE_INT, ['options' => ['default' => 3600]]);
     $tz = (string)filter_input(INPUT_POST, 'tz', FILTER_SANITIZE_SPECIAL_CHARS);
-    if($tz === "" || !in_array($tz, timezone_identifiers_list(), true)){$tz = "UTC";}
+    if($tz === "" || !in_array($tz, timezone_identifiers_list(), true))
+    {
+        # Silently swapping in UTC meant a mistyped zone (or an abbreviation like EDT, which
+        # is not a PHP identifier) produced wrong timestamps with no clue why. Say so.
+        if($tz !== "")
+        {
+            echo "<tr><td>Time zone.</td><td class='Emerg'>'".htmlspecialchars($tz, ENT_QUOTES)."' is not a PHP time zone"
+                ." identifier - abbreviations such as EDT are not accepted. Falling back to <b>UTC</b>."
+                ." To fix, set \$TZ in configs/vars.php to a full identifier like 'America/New_York'.</td></tr>";
+        }
+        $tz = "UTC";
+    }
     $ssl = filter_input(INPUT_POST, 'ssl', FILTER_VALIDATE_INT) ? 1 : 0;
     $ldap = filter_input(INPUT_POST, 'ldap', FILTER_VALIDATE_INT) ? 1 : 0;
     $ldap_domain = (string)filter_input(INPUT_POST, 'ldap_domain', FILTER_SANITIZE_SPECIAL_CHARS);
@@ -238,6 +593,8 @@ if($installing)
         ."\$page_timeout   = $page_timeout; # Refresh time for page to forward in seconds.\n"
         ."\$refresh        = $refresh; # Time for client pages to refresh.\n"
         ."\$seed           = ".var_export($seed, true)."; # Only used for internal user logins, to hash the password and store that.\n"
+        ."\$admin_user     = ".var_export($admin_user, true)."; # The built-in admin account name. Must match the row in internal_users/allowed_users.\n"
+        ."\$uns_ver        = ".var_export($uns_ver, true)."; # Version recorded at install time - shown in the admin footer, independent of deployment layout.\n"
         ."\$LDAP           = $ldap; # If this flag is set, internal users will be overridden, except for the Admin.\n"
         ."\$max_archives   = $max_arch; # The Maximum number of Archived URL lists that will be kept before the oldest is killed\n"
         ."\$max_conn_hist  = $max_conns; # The Maximum number of Connection histories that will be kept per client.\n"
@@ -267,7 +624,68 @@ if($installing)
     if(file_put_contents(__DIR__.'/configs/conn.php', $conn_file) !== false){echo "<td class='Good'>Success</td></tr>";}
     else{echo "<td class='Emerg'>Failed to write configs/conn.php - check folder permissions.</td></tr>";}
 
-    echo "</table><p>Install complete. Log in as <b>unsadmin</b> with the password you chose. <a href='admin/index.php'>Go to the Admin Panel</a>.</p></div></body></html>";
+    echo "</table>";
+
+    # Post-install hardening. The installer needed write access to configs/ to create
+    # vars.php and conn.php, but the running app does not - so that access should be
+    # taken away again. SQLite is the exception: it needs to keep writing its database
+    # (and the -wal/-shm files beside it) for as long as UNS is in use.
+    $raw_user  = uns_web_user();
+    $raw_cfg   = __DIR__.'/configs';
+    $web_user  = htmlspecialchars($raw_user, ENT_QUOTES);
+    $cfg_dir   = htmlspecialchars(uns_path_for_shell($raw_cfg), ENT_QUOTES);
+    $db_in_cfg = ($db_driver === 'sqlite' && rtrim(str_replace('\\', '/', $sqlite_dir), '/') === rtrim(str_replace('\\', '/', $raw_cfg), '/'));
+
+    echo "<h3>Recommended hardening</h3>";
+    echo "<p><font size='1'>Commands below are for ".(uns_is_windows() ? "Windows/IIS (run in an elevated command prompt)" : "Linux/Apache")
+        .", the platform this installer is running on.</font></p><ol>";
+
+    echo "<li><b>Delete this installer.</b> It cannot re-run while conn.php exists, but it still"
+        ." reports your PHP version, loaded extensions and full paths to anyone who visits it."
+        .uns_cmd_html(uns_cmd_delete(__FILE__))."</li>";
+
+    if($db_driver === 'sqlite')
+    {
+        $sq_dir = htmlspecialchars(uns_path_for_shell($sqlite_dir), ENT_QUOTES);
+        echo "<li><b>Keep the database folder writable.</b> SQLite writes -wal and -shm files"
+            ." next to the database, so <b>".$sq_dir."</b> must stay writable by <b>".$web_user."</b>"
+            ." - do not lock this one down."
+            .uns_cmd_html(uns_cmd_make_writable($sqlite_dir, $raw_user))."</li>";
+
+        if($db_in_cfg)
+        {
+            echo "<li><b>Move the database out of the web root.</b> It currently sits inside"
+                ." configs/, so it is only protected by the deny rules in configs/.htaccess"
+                ." (Apache) and configs/web.config (IIS) - and .htaccess is ignored entirely"
+                ." under <code>AllowOverride None</code>. Moving the database somewhere the web"
+                ." server does not serve removes that dependency: move the .sqlite file, then"
+                ." update <code>\$db</code> in configs/conn.php to the new path."
+                ."<br />Because the database lives here, configs/ must stay writable, so the"
+                ." read-only step below does not apply until you move it.</li>";
+        }
+        else
+        {
+            echo "<li><b>Make configs/ read-only.</b> Nothing writes to it once the install is done."
+                .uns_cmd_html(uns_cmd_make_readonly($raw_cfg, $raw_user))."</li>";
+        }
+    }
+    else
+    {
+        echo "<li><b>Make configs/ read-only.</b> Nothing writes to it once the install is done."
+            .uns_cmd_html(uns_cmd_make_readonly($raw_cfg, $raw_user))."</li>";
+    }
+
+    echo "<li><b>Restrict the credentials file.</b> configs/conn.php holds your database login"
+        ." in plain text; it should be readable by the web server and nobody else."
+        .uns_cmd_html(uns_cmd_restrict_file($raw_cfg.'/conn.php', $raw_user))."</li>";
+
+    echo "<li><b>Retire the built-in admin.</b> Once you have added your own users, disable the"
+        ." <b>".htmlspecialchars($admin_user, ENT_QUOTES)."</b> account from the admin panel's options page.</li>";
+
+    echo "</ol>";
+
+    echo "<p>Install complete. Log in as <b>".htmlspecialchars($admin_user, ENT_QUOTES)."</b> with the password from the form."
+        ." <a href='admin/index.php'>Go to the Admin Panel</a>.</p></div></body></html>";
     die();
 }
 ?>
@@ -305,6 +723,57 @@ if($installing)
                 <td><?php echo extension_loaded("pdo") ? "<font color='limegreen'>GOOD!</font>" : "<font color='red'>pdo extension is not loaded.</font>"; ?></td>
             </tr>
             <tr class="pre">
+                <td>configs/ writable, including vars.php and conn.php?</td>
+                <td><?php
+                    # Needed for every install: the installer rewrites configs/vars.php and
+                    # configs/conn.php. Both ship with UNS, so they already exist - a folder
+                    # the web server can add to may still hold files it cannot replace.
+                    $cfg_dir = __DIR__.'/configs';
+                    $cfg_problem = uns_config_write_problem();
+                    if($cfg_problem === ''){echo "<font color='limegreen'>GOOD! {".htmlspecialchars(uns_web_user(), ENT_QUOTES)."}</font>";}
+                    else
+                    {
+                        echo "<font color='red'>".htmlspecialchars($cfg_problem, ENT_QUOTES)."."
+                            ." PHP runs as <b>".htmlspecialchars(uns_web_user(), ENT_QUOTES)."</b>;"
+                            ." it must be able to replace those files, not just add new ones."
+                            .uns_cmd_html(uns_cmd_make_writable($cfg_dir, uns_web_user()))."</font>";
+                    }
+                ?></td>
+            </tr>
+            <tr class="pre">
+                <td>SQLite database safe from web download?</td>
+                <td><?php
+                    # A SQLite database under configs/ sits inside the web root, so without a
+                    # server rule it can simply be downloaded - which would hand over every
+                    # password hash and session hash. We ship configs/.htaccess for Apache;
+                    # nginx and IIS ignore it and need an equivalent rule set by hand.
+                    $server_sw = (string)($_SERVER['SERVER_SOFTWARE'] ?? '');
+                    $is_apache = stripos($server_sw, 'apache') !== false;
+                    $is_iis    = stripos($server_sw, 'iis') !== false;
+                    $guard     = $is_iis ? 'configs/web.config' : 'configs/.htaccess';
+                    $has_guard = file_exists(__DIR__.'/'.$guard);
+
+                    if(($is_apache || $is_iis) && $has_guard)
+                    {
+                        echo "<font color='limegreen'>GOOD! ".$guard." is in place.</font><br /><font size='1'>";
+                        echo $is_iis
+                            ? "Blocks .sqlite downloads via request filtering."
+                            : "Only takes effect if this vhost permits overrides - <code>AllowOverride None</code> makes Apache ignore it silently.";
+                        echo " UNS puts the database outside the web root by default, which does not depend on this.</font>";
+                    }
+                    elseif($is_apache || $is_iis)
+                    {
+                        echo "<font color='red'>".$guard." is missing - a SQLite database placed in configs/ could be downloaded over the web. Restore it from the UNS release before continuing.</font>";
+                    }
+                    else
+                    {
+                        echo "<font color='orange'>This server (".htmlspecialchars($server_sw !== '' ? $server_sw : 'unknown', ENT_QUOTES).") reads neither .htaccess nor web.config."
+                            ." If you pick SQLite, add a rule denying web access to *.sqlite under configs/, or the database can be downloaded."
+                            ." Safest option is to put the database outside the web root entirely.</font>";
+                    }
+                ?></td>
+            </tr>
+            <tr class="pre">
                 <td>XML Functions?</td>
                 <td><?php echo function_exists("xml_parser_create") ? "<font color='limegreen'>GOOD!</font>" : "<font color='red'>XML functions are not available, RSS Feeds will not work.</font>"; ?></td>
             </tr>
@@ -326,11 +795,29 @@ if($installing)
             <tr class="client_table_body sql-server-field"><td>SQL Host</td><td><input type="text" name="sql_host" style="width:50%" value="localhost"/></td></tr>
             <tr class="client_table_body sql-server-field"><td>SQL Admin User</td><td><input type="text" name="sql_root_usr" style="width:50%" value="root"/></td></tr>
             <tr class="client_table_body sql-server-field"><td>SQL Admin Password</td><td><input type="password" name="sql_root_pwd" style="width:50%" value=""/></td></tr>
-            <tr class="client_table_body sql-server-field"><td>UNS SQL Username</td><td><input type="text" name="uns_sql_usr" style="width:50%" value="uns_user"/></td></tr>
-            <tr class="client_table_body sql-server-field"><td>UNS SQL Password</td><td><input type="password" name="uns_sql_pwd" style="width:50%" value=""/></td></tr>
+            <tr class="client_table_body sql-server-field"><td>UNS SQL Username
+                <font size="1">(randomised so the account name is not guessable - edit if you prefer)</font></td>
+                <td><input type="text" name="uns_sql_usr" style="width:50%" value="uns_user_<?php echo uns_random_token(); ?>"/></td></tr>
+            <tr class="client_table_body sql-server-field"><td>UNS SQL Password
+                <br /><font size="1"><b style="color:#8B0000">Generated for you - shown in clear text so you can record it.</b>
+                UNS saves it into configs/conn.php and uses it from there, so you will never have to type it again.
+                Keep a copy only if you want to manage this database account yourself later.
+                Replace it with your own if you prefer.</font></td>
+                <td><input type="text" name="uns_sql_pwd" style="width:50%" value="<?php echo htmlspecialchars(uns_random_password(), ENT_QUOTES); ?>"/></td></tr>
             <tr class="client_table_body sql-server-field"><td>Database Name</td><td><input type="text" name="db_name" style="width:50%" value="uns"/></td></tr>
             <tr class="client_table_body sql-server-field"><td>UNS SQL User's allowed host <font size="1">(usually "localhost")</font></td><td><input type="text" name="sql_user_host" style="width:50%" value="localhost"/></td></tr>
-            <tr class="client_table_body" id="sqlite-field" style="display:none"><td>SQLite file name <font size="1">(saved under configs/)</font></td><td><input type="text" name="sqlite_name" style="width:50%" value="uns"/></td></tr>
+            <tr class="client_table_body" id="sqlite-field" style="display:none"><td>SQLite file name
+                <?php
+                    $preview_dir = uns_sqlite_dir();
+                    echo "<font size='1'>(saved in ".htmlspecialchars($preview_dir, ENT_QUOTES).")</font>";
+                    if(uns_path_is_public($preview_dir))
+                    {
+                        echo "<br /><font size='1' color='orange'>This folder is inside the web root."
+                            ." UNS could not find a writable folder outside it, so the database will rely on"
+                            ." configs/.htaccess (Apache only) to stay private.</font>";
+                    }
+                ?>
+            </td><td><input type="text" name="sqlite_name" style="width:50%" value="uns"/></td></tr>
             <tr class="client_table_head"><th colspan="2">Set your variables</th></tr>
             <tr class="client_table_body"><td>Instance Name</td><td><input type="text" name="uns_name" style="width:50%" value="URL Notification System"/></td></tr>
             <tr class="client_table_body"><td>Hostname</td><td><input type="text" name="hostname" style="width:50%" value="your.uns.server"/></td></tr>
@@ -343,7 +830,15 @@ if($installing)
             <tr class="client_table_body"><td>LDAP Port</td><td><input type="text" name="ldap_port" style="width:50%" value="3268" disabled/></td></tr>
             <tr class="client_table_body"><td>Redirect Page Timeout <font size="1">(0 = instant redirect)</font></td><td><input type="text" name="page_timeout" style="width:50%" value="0"/></td></tr>
             <tr class="client_table_body"><td>Default URL Refresh time</td><td><input type="text" name="refresh" style="width:50%" value="30"/></td></tr>
-            <tr class="client_table_body"><td>Internal Admin Password <font size="1">(needed even if LDAP is used)</font></td><td><input type="password" name="uns_admin_pwd" style="width:50%" value=""/></td></tr>
+            <tr class="client_table_body"><td>Internal Admin Username
+                <br /><font size="1">The account you log in to UNS with. Randomised so it is not a guessable target
+                like "admin" - change it to whatever you prefer.</font></td>
+                <td><input type="text" name="uns_admin_usr" style="width:50%" value="unsadmin_<?php echo uns_random_token(3); ?>" required/></td></tr>
+            <tr class="client_table_body"><td>Internal Admin Password
+                <br /><font size="1"><b style="color:#8B0000">Write these two down before you submit - you log in with them.</b>
+                Generated for you and shown in clear text; replace with something memorable if you prefer.
+                Needed even if LDAP is enabled. You can change it later from the admin panel.</font></td>
+                <td><input type="text" name="uns_admin_pwd" style="width:50%" value="<?php echo htmlspecialchars(uns_random_password(16), ENT_QUOTES); ?>" required/></td></tr>
             <tr class="client_table_body"><td>Max Number of Archived links per Client</td><td><input type="text" name="max_arch" style="width:50%" value="10"/></td></tr>
             <tr class="client_table_body"><td>Max Number of Connection History per Client</td><td><input type="text" name="max_conns" style="width:50%" value="10"/></td></tr>
             <tr class="client_table_tail"><td align="center" colspan="2"><input type="submit" value="Submit" /></td></tr>

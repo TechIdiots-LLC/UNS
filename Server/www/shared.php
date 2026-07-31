@@ -126,15 +126,33 @@ function db_create_links_table($conn, $driver, $table)
 }
 # ----------------------------------------------------------------------------
 
-# Reads the app version from the repo-root VERSION file, so the version only
-# needs updating in one place (see .github/workflows/bump-version.yml). Falls
-# back to 'unknown' if the file isn't there, eg. if only Server/www was
-# deployed on its own without the rest of the repo alongside it.
+# Reads the app version from the VERSION file, so the version only needs updating in one
+# place (see .github/workflows/bump-version.yml).
+#
+# This walks up from this file rather than using a fixed dirname(__DIR__, 2): UNS is
+# normally deployed by copying the *contents* of Server/www into a document root, which
+# leaves the repo-root VERSION file at a different depth - or absent altogether. The old
+# fixed offset only resolved when running directly from a checkout, so real installs
+# showed "vunknown" in the admin footer.
+#
+# Callers should prefer $uns_ver from configs/vars.php, which the installer records and
+# which does not depend on the deployed layout at all; this is the fallback.
 function uns_version()
 {
-    $path = dirname(__DIR__, 2).'/VERSION';
-    if(!is_readable($path)){return 'unknown';}
-    return trim(file_get_contents($path));
+    $dir = __DIR__;
+    for($i = 0; $i < 4; $i++)
+    {
+        $path = $dir.'/VERSION';
+        if(is_readable($path))
+        {
+            $ver = trim((string)file_get_contents($path));
+            if($ver !== ''){return $ver;}
+        }
+        $up = dirname($dir);
+        if($up === $dir){break;}
+        $dir = $up;
+    }
+    return 'unknown';
 }
 
 function gen_base_urls($dir)

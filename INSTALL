@@ -19,7 +19,9 @@ It will:
     (there is no fixed default password - you set one during install)
   - write configs/vars.php and configs/conn.php for you
 
-Once that's done, log in to admin/index.php as unsadmin, add more users if you
+Once that's done, log in to admin/index.php as the admin account the installer
+created for you (a randomised name like unsadmin_a1b2c3, recorded as $admin_user
+in configs/vars.php), add more users if you
 want LDAP-authenticated logins, and disable the built-in admin account if you'd
 rather not keep it around.
 

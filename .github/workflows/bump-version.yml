@@ -101,6 +101,14 @@ jobs:
           open(version_path, 'w').write(new_version + '\n')
           print(f"Updated {version_path}")
 
+          # UNS is normally deployed by copying only the contents of Server/www, which would
+          # leave the repo-root VERSION behind and make the admin footer read "vunknown".
+          # A copy ships with the app itself; keep the two in step.
+          for extra in ['Server/www/VERSION']:
+              if os.path.exists(extra):
+                  open(extra, 'w').write(new_version + '\n')
+                  print(f"Updated {extra}")
+
           # ── Sync in-app version strings ────────────────────────────────────────────
           for path in synced_files:
               if not os.path.exists(path):

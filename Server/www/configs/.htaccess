@@ -1,0 +1,34 @@
+# This folder lives inside the web root, so a SQLite database created here by
+# install.php would otherwise be downloadable over HTTP - handing out every password
+# hash and session hash in the install. Block the database files.
+#
+# This deliberately blocks only the database files rather than the whole folder,
+# because the .css files in here are loaded by the browser and must stay reachable.
+# (vars.php and conn.php are executed by PHP rather than served, so they are not
+# exposed the same way, but they are denied here too as a belt-and-braces measure.)
+#
+# NOTE: .htaccess is an Apache feature. nginx and IIS ignore this file completely -
+# on those you must add an equivalent deny rule yourself, or better, keep the SQLite
+# database somewhere outside the web root.
+
+<FilesMatch "\.(sqlite|sqlite3|db)(-wal|-shm|-journal)?$">
+    <IfModule mod_authz_core.c>
+        # Apache 2.4+
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        # Apache 2.2
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+<FilesMatch "^(conn|vars)\.php$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>

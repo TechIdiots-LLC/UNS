@@ -144,7 +144,11 @@ if($GET_login)
     $array = $stmt->fetch(PDO::FETCH_ASSOC);
     if($array && $usr == $array['username'])
     {
-        if(!$settings['built_in_admin'] && $usr == "unsadmin")
+        # The built-in admin account name is chosen at install time and stored in
+        # configs/vars.php. Older installs predate that setting, so fall back to the
+        # original hardcoded name rather than locking anyone out on upgrade.
+        if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
+        if(!$settings['built_in_admin'] && $usr == $admin_user)
         {
             $stmt = $conn->prepare("SELECT username,password FROM internal_users where username = ?");
             $stmt->execute([$usr]);
@@ -170,7 +174,7 @@ if($GET_login)
             }
             else{login_form("Login Failed.");}
 
-        }elseif($settings['built_in_admin'] && $usr == "unsadmin")
+        }elseif($settings['built_in_admin'] && $usr == $admin_user)
         {
             login_form("User is Disabled.");
         }
@@ -237,11 +241,20 @@ if(login_check())
 ?>
         <div align="center">
             <font size="1">
-                Powered by <a class="links" href="http://uns.techidiots.net/ver.htm#1">UNS v<?php echo htmlspecialchars(uns_version());?></a><br />
+                Powered by <a class="links" href="http://uns.techidiots.net/ver.htm#1">UNS v<?php
+                    # Prefer the VERSION file, which reflects the code actually deployed -
+                    # after an upgrade that is newer than the value vars.php recorded at
+                    # install time. $uns_ver is the fallback for deployments where VERSION
+                    # did not come along.
+                    $footer_ver = uns_version();
+                    if($footer_ver === 'unknown' && isset($uns_ver) && $uns_ver !== ''){$footer_ver = $uns_ver;}
+                    echo htmlspecialchars($footer_ver);
+                ?></a><br />
                 (
                 <!-- replace with final release date -->
                 <?php echo date("Y-m", filemtime('index.php'));?>
-                ) Phillip Ferland
+                ) Phillip Ferland / Random Intervals,
+                Andrew Calcutt / TechIdiots LLC
             </font>
         </div>
     </body>
@@ -1549,6 +1562,21 @@ function admin_panel($usr, $func, $proto)
                             }
                             break;
                         case "edit_proc":
+                            # Copy / Save To List / Remove all act on the ticked boxes in the Select
+                            # column. With nothing ticked $_POST['urls'] is absent, which makes the
+                            # implode() calls below raise a TypeError on PHP 8 - and Save To List
+                            # went on to store an empty list that looked blank when expanded.
+                            if((@$_POST['copy2'] || @$_POST['save_list'] || @$_POST['remove'])
+                                && (empty($_POST['urls']) || !is_array($_POST['urls'])))
+                            {
+                                echo "No URLs were selected. Tick the boxes in the <b>Select</b> column first, then press the button.<br />";
+                                ?>
+                    <script>
+                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",3000);
+                    </script>
+                                <?php
+                                break;
+                            }
                             if(@$_POST['copy2'])
                                 {
                                     ?>
@@ -1726,13 +1754,27 @@ function admin_panel($usr, $func, $proto)
                                 }
                             break;
                         case "add_url_batch":
-                            $urls = filter_input(INPUT_POST, 'URLS', FILTER_SANITIZE_SPECIAL_CHARS);
+                            $urls = (string)filter_input(INPUT_POST, 'URLS', FILTER_SANITIZE_SPECIAL_CHARS);
                             $refresh = (int)filter_input(INPUT_POST, 'refresh', FILTER_SANITIZE_SPECIAL_CHARS);
-                            $url_exp = explode("&#13;&#10;", $urls);
+                            # FILTER_SANITIZE_SPECIAL_CHARS turns the textarea's line breaks into
+                            # &#13;&#10; entities. Decode them back first, then split on any line
+                            # ending: the old explode() matched the CRLF pair literally, so a browser
+                            # submitting bare LF would have stored the whole box as a single URL.
+                            # Decoding also stops URLs containing "&" being stored double-encoded.
+                            $url_exp = preg_split('/\r\n|\r|\n/', html_entity_decode($urls, ENT_QUOTES));
                             $i=0;
+                            $skipped=0;
                             foreach($url_exp as $url_)
                             {
                                 $url_ = trim($url_);
+                                # Blank lines, and the bare scheme this form is pre-filled with, were
+                                # previously inserted as rows. That is where the empty entry in the
+                                # client's URL list came from - and, once ticked, in saved lists too.
+                                if($url_ === '' || $url_ === 'http://' || $url_ === 'https://')
+                                {
+                                    $skipped++;
+                                    continue;
+                                }
                                 $stmt = $conn->prepare("INSERT INTO ".$client_get."_links (url, disabled, refresh) VALUES (?, 0, ?)");
                                 if($stmt->execute([$url_, $refresh]))
                                 {
@@ -1749,6 +1791,7 @@ function admin_panel($usr, $func, $proto)
                             if($i > 0)
                             {
                                 echo "Added ($i) New URL for Client. (".htmlspecialchars($friendly['friendly'] ?? '', ENT_QUOTES).")<br />";
+                                if($skipped > 0){echo "Skipped ($skipped) blank line(s).<br />";}
                                 ?>
                     <script>
                         setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
@@ -2537,11 +2580,28 @@ function admin_panel($usr, $func, $proto)
                             <td colspan="4">
                                 <table border="1" width="100%">
                         <?php
+                        # Entries are stored as "url~refresh", so show the two parts in their own
+                        # columns rather than printing the raw separator. An empty list would
+                        # previously render as one blank row with no explanation.
+                        $shown = 0;
                         foreach($exp as $url)
+                        {
+                            $url = trim($url);
+                            if($url === ''){continue;}
+                            $parts = explode('~', $url, 2);
+                            $shown++;
+                            ?>
+                        <tr class="client_table_body">
+                            <td><?php echo htmlspecialchars($parts[0], ENT_QUOTES);?></td>
+                            <td align="center" style="width:120px;">refresh: <?php echo isset($parts[1]) ? (int)$parts[1] : '-';?></td>
+                        </tr>
+                        <?php
+                        }
+                        if($shown === 0)
                         {
                             ?>
                         <tr class="client_table_body">
-                            <td><?php echo htmlspecialchars($url, ENT_QUOTES);?></td>
+                            <td><i>This saved list is empty - no URLs were selected when it was saved.</i></td>
                         </tr>
                         <?php
                         }
@@ -2710,8 +2770,10 @@ function admin_panel($usr, $func, $proto)
                         ?><th>Permissions</th><th>Options</th>
                     </tr>
                     <?php
-                    $result = $conn->query("SELECT * FROM allowed_users WHERE username != 'unsadmin'");
-                    $allowed_users_all = $result->fetchAll(PDO::FETCH_ASSOC);
+                    if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
+                    $au_stmt = $conn->prepare("SELECT * FROM allowed_users WHERE username != ?");
+                    $au_stmt->execute([$admin_user]);
+                    $allowed_users_all = $au_stmt->fetchAll(PDO::FETCH_ASSOC);
                     if(count($allowed_users_all) > 0)
                     {
                         foreach($allowed_users_all as $array)
@@ -2867,8 +2929,10 @@ function admin_panel($usr, $func, $proto)
                                     <td align="Center">
                                         <form action="?func=edit_user&set=reset_pwd" method="POST">
                                             <?php
-                                            $result = $conn->query("SELECT id FROM internal_users WHERE username = 'unsadmin'");
-                                            $admusr = $result->fetch(PDO::FETCH_ASSOC);
+                                            if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
+                                            $ad_stmt = $conn->prepare("SELECT id FROM internal_users WHERE username = ?");
+                                            $ad_stmt->execute([$admin_user]);
+                                            $admusr = $ad_stmt->fetch(PDO::FETCH_ASSOC);
                                             ?>
                                             <input type="hidden" name="id" value="<?php echo (int)($admusr['id'] ?? 0);?>" />
                                             <input type="password" name="password" value="" />
