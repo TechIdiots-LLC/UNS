@@ -655,306 +655,42 @@ function admin_panel($usr, $func, $proto)
             else{echo "Failed to write Conn Config File.<br />";}
             break;
         case "edit_options":
-             ?>
-                <script type="text/javascript">
-                    function endisable( ) {
-                        document.forms['edit_options'].elements['ldap_domain'].disabled =! document.forms['edit_options'].elements['ldap'].checked;
-                        document.forms['edit_options'].elements['ldap_port'].disabled =! document.forms['edit_options'].elements['ldap'].checked;
-                    }
-                    function endisable_led( ) {
-                        document.forms['edit_options'].elements['lpt_binary'].disabled =! document.forms['edit_options'].elements['leds'].checked;
-                        document.forms['edit_options'].elements['portctl'].disabled =! document.forms['edit_options'].elements['leds'].checked;
-                    }
-                </script>
-                <div align="center">
-                    <table border="1">
-                        <tr class="client_table_head">
-                            <td width="50%" align="center">
-                                <a href="?func=backup_options">Backup Options</a>
-                            </td>
-                            <td align="center">
-                                <form enctype="multipart/form-data" name="backup_restore_options" action="?func=restore" method="POST">
-                                    <input type="hidden" name="MAX_FILE_SIZE" value="1000000"/>
-                                    <input type="file" name="restore_sql" ACCEPT="text/plain" /><br />
-                                    <input type="submit" value="Restore Database" />
-                                </form>
-                            </td>
-                        </tr>
-                    </table>
-                    <form name="edit_options" action="?func=edit_opt_proc" method="POST">
-                        <table border="1">
-                            <tr class="client_table_head">
-                                <th colspan="2">
-                                    UNS Options Editor
-                                </th>
-                            </tr>
-                            <tr class="client_table_head">
-                                <th colspan="2">
-                                    SQL Settings
-                                </th>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td width="250px">
-                                    SQL Host
-                                </td>
-                                <td width="200px">
-                                    <input type="text" name="sql_host" style="width:100%" value="<?php echo htmlspecialchars(html_entity_decode($server), ENT_QUOTES);?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    UNS SQL Username
-                                </td>
-                                <td>
-                                    <input type="text" name="uns_sql_usr" style="width:100%" value="<?php echo $username;?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    UNS SQL Password
-                                </td>
-                                <td>
-                                    <input type="password" name="uns_sql_pwd" style="width:100%" value=""/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Database Name
-                                </td>
-                                <td>
-                                    <input type="text" name="db_name" style="width:100%" value="<?php echo $db;?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_head">
-                                <th colspan="2">
-                                    UNS Variables
-                                </th>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Instance Name
-                                </td>
-                                <td>
-                                    <input type="text" name="uns_name" style="width:100%" value="<?php echo html_entity_decode($name_title);?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Hostname
-                                </td>
-                                <td>
-                                    <input type="text" name="hostname" style="width:100%" value="<?php echo html_entity_decode($host);?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                        HTTP root for UNS
-                                </td>
-                                <td>
-                                    <input type="text" name="root" style="width:100%" value="<?php echo html_entity_decode($root);?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Session Timeout <font size="1">( Seconds )</font>
-                                </td>
-                                <td>
-                                    <input type="text" name="timeout" style="width:100%" value="<?php echo $timeout;?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    SSL Admin Folder?
-                                </td>
-                                <td>
-                                    <input type="checkbox" name="ssl" value="1" <?php if($SSL){echo "checked";}?>/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Use LDAP?
-                                </td>
-                                <td>
-                                    <input type="checkbox" name="ldap" value="1" <?php if($LDAP){echo "checked";}?> onchange="endisable()"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    LDAP Domain
-                                </td>
-                                <td>
-                                    <input type="text" name="ldap_domain" style="width:100%" value="<?php echo $domain;?>" <?php if(!$LDAP){echo "disabled";}?>/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    LDAP Port
-                                </td>
-                                <td>
-                                    <input type="text" name="ldap_port" style="width:100%" value="<?php echo $port;?>" <?php if(!$LDAP){echo "disabled";}?>/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Redirect Page Timeout <font size="1">( Zero [0], will be an instant redirect. )</font>
-                                </td>
-                                <td>
-                                    <input type="text" name="page_timeout" style="width:100%" value="0"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Default URL Refresh time
-                                </td>
-                                <td>
-                                    <input type="text" name="refresh" style="width:100%" value="30"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Max Number of Archived links per Client
-                                </td>
-                                <td>
-                                    <input type="text" name="max_arch" style="width:100%" value="<?php echo $max_archives;?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Max Number of Connection History per Client.
-                                </td>
-                                <td>
-                                    <input type="text" name="max_conns" style="width:100%" value="<?php echo $max_conn_hist;?>"/>
-                                </td>
-                            </tr>
-                            <?php
-                            # Settings for Scripts/EmergencyMonitor, read from the uns_config
-                            # table. The table is created on demand, so an install that predates
-                            # it simply shows the defaults here until the form is first saved.
-                            if(!isset($driver)){$driver = 'mysql';}
-                            $ef_cfg      = uns_config_all($conn, $driver);
-                            $ef_url      = isset($ef_cfg['emerg_feed_url']) ? $ef_cfg['emerg_feed_url'] : '';
-                            $ef_minutes  = isset($ef_cfg['emerg_display_minutes']) ? (int)$ef_cfg['emerg_display_minutes'] : 30;
-                            $ef_publish  = isset($ef_cfg['emerg_publish_message']) ? (int)$ef_cfg['emerg_publish_message'] : 1;
-                            $ef_status   = isset($ef_cfg['emerg_allowed_status']) ? $ef_cfg['emerg_allowed_status'] : 'Actual';
-                            $ef_severity = isset($ef_cfg['emerg_min_severity']) ? $ef_cfg['emerg_min_severity'] : 'Unknown';
-                            $ef_max      = isset($ef_cfg['emerg_max_items']) ? (int)$ef_cfg['emerg_max_items'] : 5;
-                            $ef_follow   = isset($ef_cfg['emerg_follow_cap_links']) ? (int)$ef_cfg['emerg_follow_cap_links'] : 1;
-                            ?>
-                            <tr class="client_table_head">
-                                <td colspan="2" align="center">Emergency Alert Monitor
-                                    <br /><font size="1">Used by the scheduled script in Scripts/EmergencyMonitor.
-                                    Leave the feed URL empty to switch it off.</font></td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Alert feed URL
-                                    <br /><font size="1">CAP, RSS or Atom - the format is detected automatically</font>
-                                </td>
-                                <td>
-                                    <input type="text" name="emerg_feed_url" style="width:100%" value="<?php echo htmlspecialchars($ef_url, ENT_QUOTES);?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Display time (minutes)
-                                    <br /><font size="1">Only used when the feed gives no expiry. CAP alerts carry their own.</font>
-                                </td>
-                                <td>
-                                    <input type="text" name="emerg_display_minutes" style="width:100%" value="<?php echo $ef_minutes;?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Publish the alert text to displays?
-                                    <br /><font size="1">Writes the alert into a custom message and points an emergency URL at it</font>
-                                </td>
-                                <td>
-                                    <input type="checkbox" name="emerg_publish_message" value="1" <?php if($ef_publish){echo "checked";}?>/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    CAP status values to act on
-                                    <br /><font size="1">Comma separated. Adding Test or Exercise lets drills take over displays.</font>
-                                </td>
-                                <td>
-                                    <input type="text" name="emerg_allowed_status" style="width:100%" value="<?php echo htmlspecialchars($ef_status, ENT_QUOTES);?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Minimum CAP severity
-                                </td>
-                                <td>
-                                    <select name="emerg_min_severity" style="width:100%">
-                                        <?php
-                                        foreach(array('Unknown', 'Minor', 'Moderate', 'Severe', 'Extreme') as $sev)
-                                        {
-                                            echo "<option value=\"".$sev."\"".($ef_severity === $sev ? " selected" : "").">".$sev."</option>";
-                                        }
-                                        ?>
-                                    </select>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Feed entries to check
-                                    <br /><font size="1">Several alerts can be in force at once, so more than the newest is checked</font>
-                                </td>
-                                <td>
-                                    <input type="text" name="emerg_max_items" style="width:100%" value="<?php echo $ef_max;?>"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Follow feed links to CAP documents?
-                                    <br /><font size="1">For feeds whose entries link to CAP rather than embedding it</font>
-                                </td>
-                                <td>
-                                    <input type="checkbox" name="emerg_follow_cap_links" value="1" <?php if($ef_follow){echo "checked";}?>/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Use LEDs?
-                                </td>
-                                <td>
-                                    <input type="checkbox" name="leds" value="1" <?php if($led_blink){echo "checked";}?> onchange="endisable_led()"/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    LPT Binary
-                                </td>
-                                <td>
-                                    <input type="text" name="lpt_binary" style="width:100%" value="<?php echo html_entity_decode($lpt_set_app);?>" <?php if(!$led_blink){echo "disabled";}?>/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Portctl Binary
-                                </td>
-                                <td>
-                                    <input type="text" name="portctl" style="width:100%" value="<?php echo html_entity_decode($lpt_read_app);?>" <?php if(!$led_blink){echo "disabled";}?>/>
-                                </td>
-                            </tr>
-                            <tr class="client_table_body">
-                                <td>
-                                    Mysql Dump Binary
-                                </td>
-                                <td>
-                                    <input type="text" name="mysql_dump" style="width:100%" value="<?php echo html_entity_decode($mysql_dump_bin);?>" />
-                                </td>
-                            </tr>
-                            <tr class="client_table_tail">
-                                <td align="center"colspan="2">
-                                    <input type="submit" value="Submit" />
-                                </td>
-                            </tr>
-                        </table>
-                    </form>
-                </div>
-                    <?php
+            # Settings for Scripts/EmergencyMonitor live in the uns_config table; everything
+            # else on this screen comes from configs/vars.php and configs/conn.php.
+            if(!isset($driver)){$driver = 'mysql';}
+            $ef_cfg = uns_config_all($conn, $driver);
+
+            $eo = uns_smarty();
+            $eo->assign('sql_host',  html_entity_decode((string)$server));
+            $eo->assign('sql_user',  (string)$username);
+            $eo->assign('db_name',   (string)$db);
+            $eo->assign('uns_name',  html_entity_decode((string)$name_title));
+            $eo->assign('hostname',  html_entity_decode((string)$host));
+            $eo->assign('http_root', html_entity_decode((string)$root));
+            $eo->assign('timeout',   (int)$timeout);
+            $eo->assign('ssl',       !empty($SSL));
+            $eo->assign('ldap',      !empty($LDAP));
+            $eo->assign('ldap_domain', (string)$domain);
+            $eo->assign('ldap_port', (int)$port);
+            # These two used to be hardcoded in the markup as 0 and 30 rather than showing
+            # what was configured, so saving any unrelated option silently reset them.
+            $eo->assign('page_timeout', (int)$page_timeout);
+            $eo->assign('refresh',      (int)$refresh);
+            $eo->assign('max_arch',  (int)$max_archives);
+            $eo->assign('max_conns', (int)$max_conn_hist);
+            $eo->assign('leds',      !empty($led_blink));
+            $eo->assign('lpt_binary', html_entity_decode((string)$lpt_set_app));
+            $eo->assign('portctl',    html_entity_decode((string)$lpt_read_app));
+            $eo->assign('mysql_dump', html_entity_decode((string)$mysql_dump_bin));
+            $eo->assign('severities', array('Unknown', 'Minor', 'Moderate', 'Severe', 'Extreme'));
+            $eo->assign('ef_url',      isset($ef_cfg['emerg_feed_url']) ? $ef_cfg['emerg_feed_url'] : '');
+            $eo->assign('ef_minutes',  isset($ef_cfg['emerg_display_minutes']) ? (int)$ef_cfg['emerg_display_minutes'] : 30);
+            $eo->assign('ef_publish',  isset($ef_cfg['emerg_publish_message']) ? (int)$ef_cfg['emerg_publish_message'] : 1);
+            $eo->assign('ef_status',   isset($ef_cfg['emerg_allowed_status']) ? $ef_cfg['emerg_allowed_status'] : 'Actual');
+            $eo->assign('ef_severity', isset($ef_cfg['emerg_min_severity']) ? $ef_cfg['emerg_min_severity'] : 'Unknown');
+            $eo->assign('ef_max',      isset($ef_cfg['emerg_max_items']) ? (int)$ef_cfg['emerg_max_items'] : 5);
+            $eo->assign('ef_follow',   isset($ef_cfg['emerg_follow_cap_links']) ? (int)$ef_cfg['emerg_follow_cap_links'] : 1);
+            echo $eo->fetch('screens/edit_options.tpl');
             break;
         case "rss_feeds":
             if($perms['rss_feeds'])
