@@ -177,6 +177,12 @@ if($installing)
         echo "<td class='Good'>Connected</td></tr>";
     }
 
+    # The schema files bake in whatever uns_ver was current when they were last
+    # synced by the release workflow, which can lag between releases (they're
+    # also run directly, without install.php, for manual installs). Overwrite it
+    # here so anyone using install.php always gets the version they actually installed.
+    $conn->exec("UPDATE settings SET uns_ver = ".$conn->quote(uns_version()));
+
     $characters = '0123456789abcdefghijklmnopqrstuvwxyz';
     $seed = '';
     for($p = 0; $p < 32; $p++){$seed .= $characters[random_int(0, strlen($characters)-1)];}

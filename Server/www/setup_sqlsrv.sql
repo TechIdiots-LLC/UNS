@@ -99,7 +99,7 @@ CREATE TABLE settings (
 );
 
 IF NOT EXISTS (SELECT 1 FROM settings)
-INSERT INTO settings (emerg, built_in_admin, uns_ver, svn_rev) VALUES (0, 0, '1.0', '80');
+INSERT INTO settings (emerg, built_in_admin, uns_ver, svn_rev) VALUES (0, 0, '2.0.0', '80');
 
 IF OBJECT_ID('rss_feeds', 'U') IS NULL
 CREATE TABLE rss_feeds (

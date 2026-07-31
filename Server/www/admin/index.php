@@ -236,7 +236,7 @@ if(login_check())
 ?>
         <div align="center">
             <font size="1">
-                Powered by <a class="links" href="http://uns.techidiots.net/ver.htm#1">UNS v1.0</a><br />
+                Powered by <a class="links" href="http://uns.techidiots.net/ver.htm#1">UNS v<?php echo htmlspecialchars(uns_version());?></a><br />
                 (
                 <!-- replace with final release date -->
                 <?php echo date("Y-m", filemtime('index.php'));?>

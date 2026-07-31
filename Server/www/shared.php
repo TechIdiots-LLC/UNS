@@ -117,6 +117,17 @@ function db_create_links_table($conn, $driver, $table)
 }
 # ----------------------------------------------------------------------------
 
+# Reads the app version from the repo-root VERSION file, so the version only
+# needs updating in one place (see .github/workflows/bump-version.yml). Falls
+# back to 'unknown' if the file isn't there, eg. if only Server/www was
+# deployed on its own without the rest of the repo alongside it.
+function uns_version()
+{
+    $path = dirname(__DIR__, 2).'/VERSION';
+    if(!is_readable($path)){return 'unknown';}
+    return trim(file_get_contents($path));
+}
+
 function gen_base_urls($dir)
 {
     include "$dir/configs/vars.php";

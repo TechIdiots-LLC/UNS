@@ -45,14 +45,14 @@ jobs:
           version_path   = 'VERSION'
           changelog_path = 'CHANGELOG.md'
 
-          # Files that display the version string in-app and need to stay in sync.
-          # Matched by literal substitution of the current version, not by format-specific regex,
-          # since the three schema files each embed the INSERT differently (mysql/sqlsrv/sqlite).
+          # Schema files bake in a literal uns_ver seed value (SQL can't read VERSION at
+          # install time), so they still need syncing here. Everything else that displays
+          # a version in-app (eg. the admin footer) reads uns_version() from the VERSION
+          # file at runtime instead, so it never needs touching here.
           synced_files = [
               'Server/www/setup_mysql.sql',
               'Server/www/setup_sqlsrv.sql',
               'Server/www/setup_sqlite.sql',
-              'Server/www/admin/index.php',
           ]
 
           # ── Read current version from VERSION file ────────────────────────────────
@@ -108,7 +108,6 @@ jobs:
                   continue
               text = open(path, encoding='utf-8').read()
               updated = text.replace(f"'{current}'", f"'{new_version}'")
-              updated = updated.replace(f"v{current}", f"v{new_version}")
               if updated != text:
                   open(path, 'w', encoding='utf-8').write(updated)
                   print(f"Updated version string in {path}")
@@ -235,5 +234,5 @@ jobs:
 
             Review the `CHANGELOG.md` entries before merging. Once merged, the **Build and Release** workflow will publish the GitHub release automatically.
 
-            Note: this bump also syncs the version string embedded in `Server/www/setup_mysql.sql`, `setup_sqlsrv.sql`, `setup_sqlite.sql`, and the admin footer in `Server/www/admin/index.php`. The changelog entry on `Server/www/html/about.html` is not auto-updated (it's hand-authored HTML) — update it manually if this release is user-facing.
+            Note: this bump also syncs the `uns_ver` seed value in `Server/www/setup_mysql.sql`, `setup_sqlsrv.sql`, and `setup_sqlite.sql` (their literal fallback default for manual, non-install.php installs — `install.php` itself always writes the correct version from `VERSION` at install time). The admin footer reads `VERSION` at runtime, so it's never out of sync. The changelog entry on `Server/www/html/about.html` is not auto-updated (it's hand-authored HTML) — update it manually if this release is user-facing.
           labels: release
