@@ -27,6 +27,15 @@ jobs:
         id: check
         run: |
           VERSION=$(cat VERSION | tr -d '[:space:]')
+
+          # Guard against tagging garbage. Without this, an empty or malformed VERSION
+          # file silently produces a tag literally named "v" (see the stray v tag this
+          # repo picked up early on) instead of failing the run.
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::VERSION does not contain a valid semver version (got: '${VERSION}')"
+            exit 1
+          fi
+
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
 
@@ -98,6 +107,10 @@ jobs:
         with:
           tag:          v${{ needs.version-check.outputs.version }}
           name:         v${{ needs.version-check.outputs.version }}
+          # Only used when the tag does not already exist - pins a freshly created tag to
+          # the commit actually being packaged. An existing tag is NOT moved, so to
+          # re-release a version you must delete the old tag as well as the release.
+          commit:       ${{ github.sha }}
           bodyFile:     release-notes.md
           artifacts:    "artifacts/*.zip,artifacts/*.tar.gz"
           draft:        false

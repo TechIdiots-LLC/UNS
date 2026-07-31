@@ -1,7 +1,7 @@
 Things you will need
 ---------------------
 HTTP Server ( ie IIS or Apache)
-PHP 8.0 or later, with the pdo extension and the driver for whichever
+PHP 7.4 or later (8.x recommended), with the pdo extension and the driver for whichever
 database you pick below (pdo_mysql, pdo_sqlsrv, or pdo_sqlite)
 One of: MySQL/MariaDB, Microsoft SQL Server, or SQLite (no server needed)
 A Browser ( ie Firefox or Chrome)

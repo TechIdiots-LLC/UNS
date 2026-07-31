@@ -24,7 +24,7 @@ TechIdiots LLC -> UNS -> Read-me
 	Or go here:  http://www.gnu.org/licenses/gpl-2.0.txt
 
   Requirements:
-		PHP 8.0 or later
+		PHP 7.4 or later (8.x recommended)
 		One of: MySQL/MariaDB, Microsoft SQL Server, or SQLite (no server needed)
 		Apache or IIS
 		A Web-browser (doh!)

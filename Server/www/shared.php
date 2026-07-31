@@ -24,12 +24,20 @@
 
 function db_connect($server, $username, $password, $db, $driver = 'mysql')
 {
+    # PHP 7.4 defaults PDO to ERRMODE_SILENT, while PHP 8.0+ defaults to
+    # ERRMODE_EXCEPTION. Pin it at construction time (before any exec() runs) so both
+    # behave identically: this app checks return values throughout - if($stmt) and
+    # "!== false" - and reports failures via db_error(), which is the same contract the
+    # original mysqli code used. Without this, a failed query is a graceful message on
+    # 7.4 but an uncaught fatal on 8.x.
+    $opts = array(PDO::ATTR_ERRMODE => PDO::ERRMODE_SILENT);
+
     try
     {
         switch($driver)
         {
             case 'sqlite':
-                $pdo = new PDO('sqlite:'.$db);
+                $pdo = new PDO('sqlite:'.$db, null, null, $opts);
                 $pdo->exec('PRAGMA foreign_keys = ON');
                 # This app opens a fresh connection per function call (fine for a
                 # client/server DB, but SQLite is a single file with much stricter
@@ -44,11 +52,11 @@ function db_connect($server, $username, $password, $db, $driver = 'mysql')
                 # with strict certificate validation, which breaks connections to instances
                 # using a self-signed/internal cert unless this is set (same as WifiDB's
                 # SQL.inc.php - see the connection notes there for the underlying reason).
-                $pdo = new PDO('sqlsrv:Server='.$server.';Database='.$db.';TrustServerCertificate=true', $username, $password);
+                $pdo = new PDO('sqlsrv:Server='.$server.';Database='.$db.';TrustServerCertificate=true', $username, $password, $opts);
                 break;
             case 'mysql':
             default:
-                $pdo = new PDO('mysql:host='.$server.';dbname='.$db.';charset=utf8mb4', $username, $password);
+                $pdo = new PDO('mysql:host='.$server.';dbname='.$db.';charset=utf8mb4', $username, $password, $opts);
                 break;
         }
         return $pdo;

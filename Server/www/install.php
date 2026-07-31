@@ -293,8 +293,12 @@ if($installing)
             <tr class="client_table_head"><th colspan="2">URL Notification System Installer</th></tr>
             <tr class="client_table_head"><th colspan="2">Checking prerequisites</th></tr>
             <tr class="pre">
-                <td width="50%">PHP Version &gt;= 8.0?</td>
-                <td><?php echo (PHP_VERSION_ID >= 80000) ? "<font color='limegreen'>GOOD! {".PHP_VERSION."}</font>" : "<font color='red'>PHP version is too old.<br />".PHP_VERSION."</font>"; ?></td>
+                <td width="50%">PHP Version &gt;= 7.4?</td>
+                <td><?php
+                    if(PHP_VERSION_ID >= 80000){echo "<font color='limegreen'>GOOD! {".PHP_VERSION."}</font>";}
+                    elseif(PHP_VERSION_ID >= 70400){echo "<font color='orange'>OK {".PHP_VERSION."} - supported, but 7.4 is past end-of-life upstream; 8.x is recommended.</font>";}
+                    else{echo "<font color='red'>PHP version is too old.<br />".PHP_VERSION."</font>";}
+                ?></td>
             </tr>
             <tr class="pre">
                 <td>PDO extension?</td>
