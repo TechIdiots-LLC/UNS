@@ -1,11 +1,13 @@
 {
-  "name": "Tab Inspector",
-  "description": "Utility for working with the extension tabs api",
-  "version": "0.1",
-  "permissions": ["tabs"],
-  "background_page": "background.html",
+  "name": "UNS",
+  "description": "UNS Plugin",
+  "version": "0.2",
+  "manifest_version": 2,
+  "permissions": ["tabs","http://*/","https://*/"],
+  "background": {
+    "page": "background.html"
+  },
   "browser_action": {
-	"default_icon": "uns.png",
-    "default_title": "show tab inspector"
+	"default_icon": "uns.png"
   }
 }
