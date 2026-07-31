@@ -184,134 +184,14 @@ function uns_perm_hint($dir)
         .uns_cmd_html(uns_cmd_make_writable($raw_dir, $raw_user));
 }
 
-# True if $path resolves to somewhere under the web server's document root - ie. a file
-# placed there is potentially fetchable over HTTP. When the document root cannot be
-# determined we return true, so callers fall back to the location we know is protected.
-function uns_path_is_public($path)
-{
-    $docroot = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? ''));
-    if($docroot === false){return true;}
 
-    # The folder may not exist yet (we are often asked about it before creating it), and
-    # realpath() fails on a missing path - so resolve the nearest ancestor that does
-    # exist. A folder is inside the web root exactly when its parent chain is.
-    $probe = $path;
-    while(realpath($probe) === false)
-    {
-        $up = dirname($probe);
-        if($up === $probe){return true;}
-        $probe = $up;
-    }
-
-    $target  = rtrim(str_replace('\\', '/', realpath($probe)), '/').'/';
-    $docroot = rtrim(str_replace('\\', '/', $docroot), '/').'/';
-
-    # Windows paths are case-insensitive, and IIS's DOCUMENT_ROOT often differs in case
-    # from what realpath() returns. A case-sensitive compare would then report a folder
-    # that IS inside the web root as safe - the dangerous direction to get wrong.
-    if(uns_is_windows()){return stripos($target, $docroot) === 0;}
-    return strpos($target, $docroot) === 0;
-}
-
-# Where a SQLite database should live. Preference is a folder OUTSIDE the document root,
-# because a .sqlite file inside it can be downloaded over HTTP unless the web server is
-# configured to refuse - and that one file holds every password hash in the install.
-# Falls back to configs/ (which ships an .htaccess deny rule) only when there is no
-# usable location outside the web root. Pass $create=true to actually make the folder.
+# Where a SQLite database should live: the shared data folder, which is outside the
+# document root wherever possible. uns_data_dir() and the deny rules it writes live in
+# shared.php, because the running app needs the same folder for Smarty's compiled
+# templates - see uns_smarty().
 function uns_sqlite_dir($create = false)
 {
-    $candidate = dirname(__DIR__).'/uns-data';
-    $parent    = dirname(__DIR__);
-
-    # Judge by the parent, which always exists, so this answers the same before and
-    # after the folder is created.
-    if(!uns_path_is_public($parent) && is_writable(is_dir($candidate) ? $candidate : $parent))
-    {
-        if($create && !is_dir($candidate)){@mkdir($candidate, 0750);}
-        if($create && is_dir($candidate)){uns_write_data_guards($candidate);}
-        if(!$create || is_dir($candidate)){return $candidate;}
-    }
-    return __DIR__.'/configs';
-}
-
-# Drop deny rules into the data folder for both supported web servers - Apache reads
-# .htaccess and ignores web.config, IIS does the exact opposite, so write both rather
-# than trying to guess which one will be in front of this folder later.
-#
-# This is belt-and-braces, not the actual protection. While the folder sits outside the
-# document root - which is the default - neither file does anything at all, because no
-# URL maps there. They earn their keep only if the server layout later changes (a vhost
-# or site re-pointed at the parent directory, an Alias/virtual directory added, the app
-# moved) and the folder quietly becomes reachable.
-function uns_write_data_guards($dir)
-{
-    $htaccess = $dir.'/.htaccess';
-    if(!file_exists($htaccess))
-    {
-        $rules = "# UNS data folder - nothing in here should ever be served over HTTP.\n"
-            ."#\n"
-            ."# NOTE: this file does nothing while the folder is outside the document root\n"
-            ."# (no URL maps here), and Apache ignores it entirely when the vhost sets\n"
-            ."# AllowOverride None. IIS and nginx never read .htaccess at all - see\n"
-            ."# web.config alongside this file for IIS. Treat these as a safety net for\n"
-            ."# later re-configuration, not as the primary protection.\n"
-            ."#\n"
-            ."# PHP reads the database through the filesystem, not over HTTP, so denying\n"
-            ."# everything here costs the application nothing.\n"
-            ."\n"
-            ."# Belt and braces: if the deny rules below are ignored (AllowOverride None),\n"
-            ."# at least do not hand out a directory listing of this folder.\n"
-            ."Options -Indexes\n"
-            ."\n"
-            ."<IfModule mod_authz_core.c>\n"
-            ."    # Apache 2.4+\n"
-            ."    Require all denied\n"
-            ."</IfModule>\n"
-            ."<IfModule !mod_authz_core.c>\n"
-            ."    # Apache 2.2\n"
-            ."    Order allow,deny\n"
-            ."    Deny from all\n"
-            ."</IfModule>\n";
-        @file_put_contents($htaccess, $rules);
-    }
-
-    $webconfig = $dir.'/web.config';
-    if(!file_exists($webconfig))
-    {
-        # allowUnlisted="false" denies every extension that is not explicitly allowed, and
-        # nothing is allowed here - a blanket deny rather than a blocklist, so an unforeseen
-        # name like uns.sqlite.bak cannot slip through. requestFiltering is part of the base
-        # IIS 7+ install, so this needs no extra role service. URL Authorization
-        # (<authorization>) would also work but returns a 500 when that role service is
-        # absent, which is a worse failure mode than the thing it protects against.
-        $xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-            ."<!--\n"
-            ."    UNS data folder - nothing in here should ever be served over HTTP.\n"
-            ."    Does nothing while this folder is outside the site root; kept as a safety\n"
-            ."    net in case the site layout later changes. Apache uses .htaccess instead.\n"
-            ."\n"
-            ."    PHP reads the database through the filesystem, not over HTTP, so denying\n"
-            ."    everything here costs the application nothing.\n"
-            ."-->\n"
-            ."<configuration>\n"
-            ."    <system.webServer>\n"
-            ."        <directoryBrowse enabled=\"false\" />\n"
-            ."        <security>\n"
-            ."            <requestFiltering>\n"
-            ."                <fileExtensions allowUnlisted=\"false\" />\n"
-            ."            </requestFiltering>\n"
-            ."        </security>\n"
-            ."    </system.webServer>\n"
-            ."</configuration>\n";
-        @file_put_contents($webconfig, $xml);
-    }
-
-    # A directory index that works no matter what the server config says. If the deny rules
-    # above are ignored - AllowOverride None on Apache, or web.config overrides locked on
-    # IIS - a request for the folder still hits this empty file instead of listing the
-    # database. configs/ has carried an empty index.php for the same reason for years.
-    $index = $dir.'/index.php';
-    if(!file_exists($index)){@file_put_contents($index, "<?php # Intentionally blank - keeps this folder from being listed.\n");}
+    return uns_data_dir('', $create);
 }
 
 # Splits a schema file into individual statements. Neither mysqli's multi_query() nor

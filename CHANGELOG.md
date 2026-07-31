@@ -2,7 +2,9 @@
 
 ## master
 ### ✨ Features and improvements
-- _...Add new stuff here..._
+- Pages are rendered with Smarty 5.8.4 instead of HTML echoed from inside PHP. The library is vendored under `Server/www/lib/smarty` (UNS has no Composer setup) and loaded through the PSR-4 stub Smarty ships for that purpose. Smarty 5 supports PHP 7.2+, so this does not affect the PHP 7.4 support added in 2.0.0.
+- Client pages (`html/template.php`) now render from real templates in `Server/www/templates/`, replacing the `$template_head_*` / `$template_foot_*` HTML strings that were stored inside `configs/vars.php`.
+- Compiled templates and cache are written to the same writable data folder as a SQLite database - outside the document root wherever possible, with Apache/IIS deny rules and a directory index.
 
 ### 🐞 Bug fixes
 - _...Add new stuff here..._

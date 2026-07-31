@@ -161,3 +161,11 @@ pip-log.txt
 
 # Mac crap
 .DS_Store
+
+# UNS generated data - compiled Smarty templates, cache, and a SQLite database.
+# These are created at runtime in whichever writable folder uns_data_dir() resolves to.
+Server/uns-data/
+Server/www/configs/templates_c/
+Server/www/configs/templates_cache/
+Server/www/configs/*.sqlite
+Server/www/configs/*.sqlite-*

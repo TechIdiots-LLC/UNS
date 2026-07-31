@@ -88,9 +88,13 @@ switch($type)
 }
 
 ########################
-echo $template_head.
-     html_entity_decode($array['body']).
-     $template_foot;
+# Rendered through Smarty as of 3.0. The page furniture that used to be built from the
+# $template_head_* / $template_foot_* strings in configs/vars.php now lives in real
+# templates under templates/ - see uns_smarty().
+$smarty = uns_smarty();
+$smarty->assign('body', html_entity_decode($array['body']));
+$smarty->assign('name', isset($array['name']) ? $array['name'] : '');
+$smarty->display($type === 'rss' ? 'page_rss.tpl' : 'page_cmessage.tpl');
 ########################
 
 

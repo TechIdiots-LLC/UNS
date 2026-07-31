@@ -124,6 +124,157 @@ function db_create_links_table($conn, $driver, $table)
     }
     return $conn->exec($sql) !== false;
 }
+# --- Writable data directory ------------------------------------------------
+#
+# UNS needs somewhere to write things that are not configuration: a SQLite database,
+# and Smarty's compiled templates and cache. None of it should ever be served over
+# HTTP, so the preference is a folder OUTSIDE the document root, falling back to
+# configs/ (which ships deny rules) only when nothing better is writable.
+#
+# These live here rather than in install.php because the running app needs them too -
+# Smarty resolves its compile directory on every request.
+
+# True if $path resolves to somewhere under the web server's document root - ie. a file
+# placed there is potentially fetchable over HTTP. When the document root cannot be
+# determined we return true, so callers fall back to the location we know is protected.
+function uns_path_is_public($path)
+{
+    $docroot = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? ''));
+    if($docroot === false){return true;}
+
+    # The folder may not exist yet (we are often asked about it before creating it), and
+    # realpath() fails on a missing path - so resolve the nearest ancestor that does
+    # exist. A folder is inside the web root exactly when its parent chain is.
+    $probe = $path;
+    while(realpath($probe) === false)
+    {
+        $up = dirname($probe);
+        if($up === $probe){return true;}
+        $probe = $up;
+    }
+
+    $target  = rtrim(str_replace('\\', '/', realpath($probe)), '/').'/';
+    $docroot = rtrim(str_replace('\\', '/', $docroot), '/').'/';
+
+    # Windows paths are case-insensitive, and IIS's DOCUMENT_ROOT often differs in case
+    # from what realpath() returns. A case-sensitive compare would then report a folder
+    # that IS inside the web root as safe - the dangerous direction to get wrong.
+    if(PHP_OS_FAMILY === 'Windows'){return stripos($target, $docroot) === 0;}
+    return strpos($target, $docroot) === 0;
+}
+
+# Drop deny rules into a folder that must never be served. Apache reads .htaccess and
+# ignores web.config, IIS does the exact opposite, so write both rather than guessing
+# which one will be in front of the folder later. The index.php is the one that works
+# regardless of server configuration - AllowOverride None or locked IIS sections can
+# neutralise the other two, but a directory request still resolves to the index file.
+#
+# This is belt and braces: while the folder is outside the document root none of it does
+# anything, because no URL maps there. It earns its keep only if the layout later changes.
+function uns_write_dir_guards($dir)
+{
+    $htaccess = $dir.'/.htaccess';
+    if(!file_exists($htaccess))
+    {
+        @file_put_contents($htaccess,
+            "# UNS data folder - nothing in here should ever be served over HTTP.\n"
+            ."#\n"
+            ."# Does nothing while this folder is outside the document root, and Apache\n"
+            ."# ignores it entirely under AllowOverride None. IIS uses web.config instead.\n"
+            ."# PHP reads these files from the filesystem, so denying everything here\n"
+            ."# costs the application nothing.\n"
+            ."Options -Indexes\n"
+            ."<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n"
+            ."<IfModule !mod_authz_core.c>\n    Order allow,deny\n    Deny from all\n</IfModule>\n");
+    }
+
+    $webconfig = $dir.'/web.config';
+    if(!file_exists($webconfig))
+    {
+        # allowUnlisted="false" denies every extension not explicitly allowed, and nothing
+        # is allowed here - a blanket deny rather than a blocklist. requestFiltering is in
+        # the base IIS install, unlike URL Authorization which 500s when absent.
+        @file_put_contents($webconfig,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            ."<!-- UNS data folder - nothing in here should ever be served over HTTP. -->\n"
+            ."<configuration>\n    <system.webServer>\n        <directoryBrowse enabled=\"false\" />\n"
+            ."        <security>\n            <requestFiltering>\n"
+            ."                <fileExtensions allowUnlisted=\"false\" />\n"
+            ."            </requestFiltering>\n        </security>\n"
+            ."    </system.webServer>\n</configuration>\n");
+    }
+
+    $index = $dir.'/index.php';
+    if(!file_exists($index)){@file_put_contents($index, "<?php # Intentionally blank - keeps this folder from being listed.\n");}
+}
+
+# Resolves (and optionally creates) UNS's writable data folder, or a named subfolder of
+# it. Returns a path that is outside the document root where possible; otherwise a
+# folder under configs/, which ships the same deny rules.
+function uns_data_dir($subdir = '', $create = false)
+{
+    $candidate = dirname(__DIR__).'/uns-data';
+    $parent    = dirname(__DIR__);
+
+    # Judge by the parent, which always exists, so this answers the same before and after
+    # the folder is created.
+    $base = null;
+    if(!uns_path_is_public($parent) && is_writable(is_dir($candidate) ? $candidate : $parent))
+    {
+        if($create && !is_dir($candidate)){@mkdir($candidate, 0750, true);}
+        if(!$create || is_dir($candidate)){$base = $candidate;}
+    }
+    if($base === null){$base = __DIR__.'/configs';}
+
+    if($create && is_dir($base)){uns_write_dir_guards($base);}
+
+    if($subdir === ''){return $base;}
+
+    $path = $base.'/'.$subdir;
+    if($create && !is_dir($path)){@mkdir($path, 0750, true);}
+    return $path;
+}
+
+# --- Templating -------------------------------------------------------------
+#
+# UNS 3.0 renders through Smarty rather than echoing HTML from inside PHP. The library
+# is vendored under lib/smarty (UNS has no Composer setup) and loaded through the stub
+# PSR-4 loader Smarty ships for exactly that case.
+#
+# Compiled templates and the cache go in the writable data folder, which is outside the
+# document root wherever possible - they are generated PHP, and must never be served.
+
+function uns_smarty()
+{
+    static $smarty = null;
+    if($smarty !== null){return $smarty;}
+
+    require_once __DIR__.'/lib/smarty/libs/Smarty.class.php';
+
+    $smarty = new Smarty\Smarty();
+    $smarty->setTemplateDir(__DIR__.'/templates');
+    $smarty->setCompileDir(uns_data_dir('templates_c', true));
+    $smarty->setCacheDir(uns_data_dir('templates_cache', true));
+
+    # Caching is off: every page here is either per-request (an admin screen) or already
+    # cheap (a client redirect). Compilation is still cached, which is where the win is.
+    $smarty->setCaching(Smarty\Smarty::CACHING_OFF);
+
+    # Values every template can rely on.
+    $vars = __DIR__.'/configs/vars.php';
+    if(is_readable($vars))
+    {
+        include $vars;
+        $smarty->assign('uns_title', isset($name_title) ? $name_title : 'URL Notification System');
+        $smarty->assign('uns_ssl', !empty($SSL));
+        $smarty->assign('uns_root', isset($root) ? $root : '');
+        $smarty->assign('uns_host', isset($host) ? $host : '');
+    }
+    $smarty->assign('uns_version', uns_version());
+
+    return $smarty;
+}
+
 # --- Settings stored in the database ---------------------------------------
 #
 # configs/vars.php still holds the original settings, but anything added since lives
