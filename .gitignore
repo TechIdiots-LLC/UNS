@@ -169,3 +169,10 @@ Server/www/configs/templates_c/
 Server/www/configs/templates_cache/
 Server/www/configs/*.sqlite
 Server/www/configs/*.sqlite-*
+
+# Live UNS configuration, written by install.php and the UNS Options page.
+# The tracked copies are configs/*.sample.php - the real ones must never be
+# committed, and being tracked also meant a fresh checkout shipped files the
+# installer then had to overwrite.
+Server/www/configs/vars.php
+Server/www/configs/conn.php

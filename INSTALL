@@ -36,11 +36,13 @@ Create a database user for UNS to connect with (not needed for SQLite).
 Permissions needed are all (minus grant) for the UNS database and none for global.
 
     Step 3
-Edit configs/conn.php - set $driver to mysql, sqlsrv, or sqlite, and fill in
-the connection details (or, for sqlite, just the file path in $db).
+Copy configs/conn.sample.php to configs/conn.php, then edit it - set $driver
+to mysql, sqlsrv, or sqlite, and fill in the connection details (or, for
+sqlite, just the file path in $db). Only the .sample.php files ship with UNS;
+your real configs are never touched by an update.
 
     Step 4
-Edit configs/vars.php
+Copy configs/vars.sample.php to configs/vars.php and edit it.
 *See file for details*
 
     Step 5

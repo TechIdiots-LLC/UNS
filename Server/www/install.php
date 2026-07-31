@@ -151,11 +151,13 @@ function uns_cmd_html($cmd)
 # Returns '' when the installer can genuinely write both config files, otherwise a short
 # explanation of what is in the way.
 #
-# Checking is_writable() on the folder alone is not enough, and getting this wrong is what
-# let an install get half-finished: vars.php and conn.php are tracked files that already
-# exist in a fresh checkout, and overwriting an existing file needs write permission on
-# that FILE. A folder the web server can add to (so creating the SQLite database succeeds)
-# can still hold config files it cannot replace.
+# Checking is_writable() on the folder alone is not enough: overwriting an existing file
+# needs write permission on that FILE, and a folder the web server can add to (so creating
+# the SQLite database succeeds) can still hold config files it cannot replace.
+#
+# On a fresh checkout neither file exists - only configs/*.sample.php is tracked - so this
+# normally just checks the folder. The per-file check still matters when re-running the
+# installer over an existing install.
 function uns_config_write_problem()
 {
     $dir = __DIR__.'/configs';
