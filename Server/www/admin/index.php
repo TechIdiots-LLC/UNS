@@ -843,127 +843,27 @@ function admin_panel($usr, $func, $proto)
                 }
                 // -->
                 </script>
-                <table border="1px" width="100%">
-                    <tr class="client_table_head">
-                        <form name="save_new" action="?func=rss_feeds&mode=edit_rss" method="POST">
-                        <th colspan="6">RSS Feeds</th>
-                    </tr>
-                    <tr class="client_table_head">
-                        <th colspan="6"><input type='submit' name="update_rss" value="Update All Feeds"></th>
-                    </tr>
-                    <tr class="client_table_head">
-                        <th>+/-</th><th>Name</th><th>Max lines</th><th>RSS Feed URL</th><th>Options</th>
-                    </tr>
                     <?php
-                        $link = db_connect($server, $username, $password, $db, $driver);
-                        $result = $link->query("SELECT * FROM rss_feeds ORDER by name ASC");
-                        $rss_all = $result->fetchAll(PDO::FETCH_ASSOC);
-                        if(count($rss_all))
-                        {
-                            $tablerowid=0;
-                            foreach($rss_all as $links)
-                            {
-                                $rss_id = (int)$links['id'];
-                                $rss_name = htmlspecialchars($links['name'], ENT_QUOTES);
-                                $rss_url = htmlspecialchars($links['url'], ENT_QUOTES);
-                            ?>
-                        <tr class="client_table_body">
-                            <td onclick="expandcontract('mesgRow<?php echo $tablerowid;?>','mesgClickIcon<?php echo $tablerowid;?>')"
-                                id="mesgClickIcon<?php echo $tablerowid;?>" style="cursor: pointer; cursor: hand;">+</td>
-                            </td>
-                            <td style="width:25%;">
-                                <input type="hidden" name="id[]" value="<?php echo $rss_id;?>"/>
-                                <input type="text" name="name[]" style="width:90%;" value="<?php echo $rss_name;?>"/>
-                            </td>
-                            <td>
-                                <input type="text" name="maxlines[]" style="width:45px;" value="<?php echo (int)$links['maxlines'];?>"/>
-                            </td>
-                            <td>
-                                <a class="links" href="<?php echo $reg_url;?>html/template.php?type=rss&id=<?php echo $rss_id;?>" target="_blank"><?php echo $reg_url;?>html/template.php?type=rss&id=<?php echo $rss_id;?></a>
-                            </td>
-                            <td align="center">
-                                <input type="checkbox" name="remove_[]" value="<?php echo $rss_id;?>"/>
-                            </td>
-                        </tr>
-                        <tbody id="mesgRow<?php echo $tablerowid;?>" style="display:none">
-                        <tr>
-                            <td colspan="6">
-                                <input type="text" name="body[]" style="width:100%" value="<?php echo $rss_url;?>" />
-                                <br />
-                                <br />
-                            </td>
-                        </tr>
-                        </tbody>
-                            <?php
-                                $tablerowid++;
-                            }
-                        }else
-                        {
-                        ?>
-                        <tr>
-                            <td align="center" colspan="5">
-                                There are no RSS Feeds yet.
-                            </td>
-                        </tr>
-                        <?php
-                        }
-                        ?>
-                    <tr class="client_table_tail">
-                        <td align="center" colspan="4">
-                        </td>
-                        <td align="center">
-                            <table width="100%">
-                                <tr>
-                                    <td align="center">
-                                        <input type='submit' name="remove" value='Remove'>
-                                    </td>
-                                    <td align="center">
-                                        <input type="button" onclick="SetAllCheckBoxes('save_new', 'remove_[]', true);" value="Check"><br />
-                                        <input type="button" onclick="SetAllCheckBoxes('save_new', 'remove_[]', false);" value="Uncheck">
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    </form>
-                    <tr class="client_table_tail">
-                        <td colspan="6" align="center">
-                            <form name="save_new1" action="?func=rss_feeds&mode=add_rss" method="POST">
-                            <table>
-                                <tr>
-                                    <td valign="center">
-                                        Name:
-                                    </td>
-                                    <td>
-                                        <input type="text" name="name_n" style="width:400px;" value="">
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td valign="center">
-                                        RSS URL:
-                                    </td>
-                                    <td>
-                                        <input type="text" name="url_n" style="width:400px;" value="http://">
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td valign="center">
-                                        Max Lines:
-                                    </td>
-                                    <td>
-                                        <input type="text" name="maxlines_n" style="width:45px" value="<?php echo $refresh; ?>">
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td colspan="2" align="center">
-                                        <input type='submit' value='Add RSS'>
-                                    </td>
-                                </tr>
-                            </table>
-                            </form>
-                        </td>
-                    </tr>
-                </table>
+                    # Presentation lives in screens/rss_feeds.tpl; the add/edit handlers
+                    # above stay in PHP - they are actions, not markup.
+                    $rf_stmt = $conn->query("SELECT * FROM rss_feeds ORDER by name ASC");
+                    $rss_all = $rf_stmt ? $rf_stmt->fetchAll(PDO::FETCH_ASSOC) : array();
+                    $feeds = array();
+                    foreach($rss_all as $row)
+                    {
+                        $feeds[] = array(
+                            'id'       => (int)$row['id'],
+                            'name'     => $row['name'],
+                            'url'      => $row['url'],
+                            'maxlines' => (int)$row['maxlines'],
+                            'feed_url' => $reg_url.'html/template.php?type=rss&id='.(int)$row['id'],
+                        );
+                    }
+                    $rf = uns_smarty();
+                    $rf->assign('feeds', $feeds);
+                    $rf->assign('maxlines_default', (int)$refresh);
+                    echo $rf->fetch('screens/rss_feeds.tpl');
+                    ?>
                         <?php
                         break;
                 }
@@ -1133,125 +1033,26 @@ function admin_panel($usr, $func, $proto)
                 }
                 // -->
                 </script>
-                <table border="1px" width="100%">
-                    <tr class="client_table_head">
-                        <form name="save_new" action="?func=c_messages&mode=edit_messg" method="POST">
-                        <th colspan="5">Custom Messages</th>
-                    </tr>
-                    <tr class="client_table_head">
-                        <th colspan="5"><input type='submit' name="update_body" value="Update All Messages"></th>
-                    </tr>
-                    <tr class="client_table_head">
-                        <th style="width:1px;">+/-</th><th>Name</th><th>Message URL</th><th width="1px">Options</th>
-                    </tr>
                     <?php
-                        $link = db_connect($server, $username, $password, $db, $driver);
-                        $result = $link->query("SELECT * FROM c_messages ORDER by id ASC");
-                        $cm_all = $result->fetchAll(PDO::FETCH_ASSOC);
-                        if(count($cm_all))
-                        {
-                            $tablerowid=0;
-                            foreach($cm_all as $links)
-                            {
-                                $cm_id = (int)$links['id'];
-                                $cm_name = htmlspecialchars($links['name'], ENT_QUOTES);
-                            ?>
-                        <tr class="client_table_body">
-                            <td onclick="expandcontract('mesgRow<?php echo $tablerowid;?>','mesgClickIcon<?php echo $tablerowid;?>')"
-                                id="mesgClickIcon<?php echo $tablerowid;?>" style="cursor: pointer; cursor: hand;">+
-                            </td>
-                            <td style="width:25%;">
-                                <input type="hidden" name="id[]" value="<?php echo $cm_id;?>"/>
-                                <input type="text" name="name[]" style="width:90%;" value="<?php echo $cm_name;?>"/>
-                            </td>
-                            <td>
-                                <a class="links" href="<?php echo  $reg_url;?>html/template.php?type=c_message&id=<?php echo $cm_id;?>" target="_blank"><?php echo $reg_url;?>html/template.php?type=c_message&id=<?php echo $cm_id;?></a>
-                            </td>
-                            <td style="width:1%;" align="center">
-                                <input type="checkbox" name="remove_[]" value="<?php echo $cm_id;?>"/>
-                            </td>
-                        </tr>
-                        <tbody id="mesgRow<?php echo $tablerowid;?>" style="display:none">
-                        <tr>
-                            <td colspan="5">
-                                <textarea name="body[]" rows="10" style="width:90%"><?php echo $links['body'];?></textarea>
-                                <br />
-                                Use the UNS Wrapper? <input type="checkbox" name="wrapper[]" value="1" <?php if($links['wrapper']){echo "Checked";} ?>/>
-                                <br />
-                            </td>
-                        </tr>
-                        </tbody>
-                            <?php
-                                $tablerowid++;
-                            }
-                        }else
-                        {
-                        ?>
-                        <tr>
-                            <td align="center" colspan="5">
-                                There are no custom messages yet.
-                            </td>
-                        </tr>
-                        <?php
-                        }
-                        ?>
-                    <tr class="client_table_tail">
-                        <td align="center" colspan="3">
-                        </td>
-                        <td align="center">
-                            <table>
-                                <tr>
-                                    <td align="center" valign="center">
-                                        <input type='submit' name="remove" value='Remove'>
-                                    </td>
-                                    <td align="center" valign="center">
-                                        <input type="button" onclick="SetAllCheckBoxes('save_new', 'remove_[]', true);" value="Check"><br />
-                                        <input type="button" onclick="SetAllCheckBoxes('save_new', 'remove_[]', false);" value="Uncheck">
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    </form>
-                    <tr class="client_table_tail">
-                        <td colspan="5" align="center">
-                            <form name="save_new1" action="?func=c_messages&mode=add_messg" method="POST">
-                            <table>
-                                <tr>
-                                    <td valign="center">
-                                        Name:
-                                    </td>
-                                    <td>
-                                        <input type="text" name="name_n" style="width:100%;" value="">
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td valign="center">
-                                        Message:<br />
-                                        <font size="1">In HTML</font>
-                                    </td>
-                                    <td>
-                                        <textarea name="body_n" cols="100" rows="10">[Put Message Here]</textarea>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td align="center">
-                                        Use the UNS Wrapper?
-                                    </td>
-                                    <td>
-                                        <input type="checkbox" name="wrapper" value="1" Checked/>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td colspan="2" align="center">
-                                        <input type='submit' value='Add Message'>
-                                    </td>
-                                </tr>
-                            </table>
-                            </form>
-                        </td>
-                    </tr>
-                </table>
+                    # Presentation lives in screens/c_messages.tpl. The add/edit handlers
+                    # above stay in PHP - they are actions, not markup.
+                    $cm_stmt = $conn->query("SELECT * FROM c_messages ORDER by id ASC");
+                    $cm_all  = $cm_stmt ? $cm_stmt->fetchAll(PDO::FETCH_ASSOC) : array();
+                    $messages = array();
+                    foreach($cm_all as $row)
+                    {
+                        $messages[] = array(
+                            'id'      => (int)$row['id'],
+                            'name'    => $row['name'],
+                            'body'    => $row['body'],
+                            'wrapper' => !empty($row['wrapper']),
+                            'url'     => $reg_url.'html/template.php?type=c_message&id='.(int)$row['id'],
+                        );
+                    }
+                    $cm = uns_smarty();
+                    $cm->assign('messages', $messages);
+                    echo $cm->fetch('screens/c_messages.tpl');
+                    ?>
                         <?php
                         break;
                 }
