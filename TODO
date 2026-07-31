@@ -1,6 +1,7 @@
-Add support for smarty
-Add support for PDO
-Rewrite install for other SQL DBs (postgres)
+Add support for other SQL DBs (postgres)
+Let internal (non-LDAP) users other than the built-in unsadmin account actually
+log in - add_user()/view_users() can create them, but the login handler only
+ever checks internal_users for the literal username "unsadmin"
 rewrite to OO code
     write core code [core()]
     admin code	[admin()]

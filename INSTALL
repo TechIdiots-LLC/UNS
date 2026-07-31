@@ -1,35 +1,50 @@
 Things you will need
 ---------------------
 HTTP Server ( ie IIS or Apache)
-MySQL 5
-PHP 5
-PHPmyadmin (for easy MySQL management)
+PHP 8.0 or later, with the pdo extension and the driver for whichever
+database you pick below (pdo_mysql, pdo_sqlsrv, or pdo_sqlite)
+One of: MySQL/MariaDB, Microsoft SQL Server, or SQLite (no server needed)
 A Browser ( ie Firefox or Chrome)
 
 
 Instructions
 ---------------------
-I am assuming that you already have your SQL server and HTTP server with PHP set up and working.
+The easiest way to install UNS is to point your browser at Server/www/install.php.
+It will:
+  - check that PHP and the required extensions are available
+  - let you choose your database (MySQL, SQL Server, or SQLite)
+  - create the database/user (or, for SQLite, just the database file) and import
+    the matching schema (setup_mysql.sql / setup_sqlsrv.sql / setup_sqlite.sql)
+  - create the built-in "unsadmin" account with the password you choose
+    (there is no fixed default password - you set one during install)
+  - write configs/vars.php and configs/conn.php for you
+
+Once that's done, log in to admin/index.php as unsadmin, add more users if you
+want LDAP-authenticated logins, and disable the built-in admin account if you'd
+rather not keep it around.
+
+If you'd rather set it up by hand instead of using install.php:
 
     Step 1
-Insert setup.sql into your database (this will create the UNS DB and all the tables)
+Run the setup file matching your database (setup_mysql.sql, setup_sqlsrv.sql,
+or setup_sqlite.sql) against it to create the UNS tables.
 
     Step 2
-Create a MySQL user for UNS to connect with.
+Create a database user for UNS to connect with (not needed for SQLite).
 Permissions needed are all (minus grant) for the UNS database and none for global.
 
     Step 3
-Edit the config/conn.php file
-*See file for details*
+Edit configs/conn.php - set $driver to mysql, sqlsrv, or sqlite, and fill in
+the connection details (or, for sqlite, just the file path in $db).
 
     Step 4
-Edit the config/vars.php file
+Edit configs/vars.php
 *See file for details*
 
     Step 5
-Login with the default User of UNS_Admin
-Password UNS_Pass
-Add more users and disable the built-in Admin.
+Manually insert an admin row into internal_users (password column must be a
+password_hash() value) and a matching row into allowed_users with username
+'unsadmin', then log in and add more users / disable the built-in admin.
 
     Step 6
 Add Viewing Clients and set them up as you like.
