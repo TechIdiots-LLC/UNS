@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS `allowed_clients` (
   `id` int(255) NOT NULL AUTO_INCREMENT,
   `client_name` varchar(255) NOT NULL,
+  `led` int(11) NOT NULL DEFAULT '1',
   PRIMARY KEY (`id`),
   UNIQUE KEY `client_name` (`client_name`)
 ) ENGINE=InnoDB  DEFAULT CHARSET=utf8 AUTO_INCREMENT=0;
@@ -122,7 +123,7 @@ CREATE TABLE IF NOT EXISTS `hash_links` (
 CREATE TABLE IF NOT EXISTS `internal_users` (
   `id` int(255) NOT NULL AUTO_INCREMENT,
   `username` varchar(255) COLLATE utf8_bin NOT NULL,
-  `password` varchar(32) COLLATE utf8_bin NOT NULL,
+  `password` varchar(255) COLLATE utf8_bin NOT NULL,
   `disabled` tinyint(4) NOT NULL,
   `failed` int(1) NOT NULL,
   PRIMARY KEY (`id`),

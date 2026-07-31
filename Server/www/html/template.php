@@ -15,6 +15,10 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+# Since PHP 8.1, mysqli throws on errors by default instead of returning false - restore the
+# old behavior so the if($stmt->execute()){...}else{...} checks below work as written.
+mysqli_report(MYSQLI_REPORT_OFF);
+
 $ID = filter_input(INPUT_GET, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
 $type = @filter_input(INPUT_GET, 'type', FILTER_SANITIZE_SPECIAL_CHARS);
 include '../configs/vars.php';
@@ -27,12 +31,13 @@ switch($type)
     case "rss":
         $template_head = $template_head_rss;
         $template_foot = $template_foot_rss;
-        $sql = "SELECT * FROM `rss_feeds` WHERE `id` = '$ID'";
-        $result = $conn->query($sql, 1);
-        if($result)
+        $stmt = $conn->prepare("SELECT * FROM `rss_feeds` WHERE `id` = ?");
+        $stmt->bind_param("s", $ID);
+        if($stmt->execute())
         {
-            $array = $result->fetch_array(1);
-            if(@$array['id'] != '')
+            $result = $stmt->get_result();
+            $array = $result->fetch_array(MYSQLI_ASSOC);
+            if(!empty($array['id']))
             {
                 $max = $array['maxlines']+0;
                 $rss_ret = gen_rss($array['url'], $max);
@@ -53,18 +58,23 @@ switch($type)
         }else
         {
             $array['name'] = "RSS Feed Not Found";
-            $array['body'] = "You did something wrong.....<br />".$conn->error;
+            $array['body'] = "You did something wrong.....<br />".htmlspecialchars($stmt->error, ENT_QUOTES);
         }
         break;
     case "c_message":
         $template_head = $template_head_cmsg;
         $template_foot = $template_foot_cmsg;
-        $sql = "SELECT * FROM `c_messages` WHERE `id` = '$ID'";
-        $result = $conn->query($sql, 1);
-        if($result)
+        $stmt = $conn->prepare("SELECT * FROM `c_messages` WHERE `id` = ?");
+        $stmt->bind_param("s", $ID);
+        if($stmt->execute())
         {
-            $array = $result->fetch_array(1);
-            if(!$array['wrapper'])
+            $result = $stmt->get_result();
+            $array = $result->fetch_array(MYSQLI_ASSOC);
+            if(empty($array))
+            {
+                $array['name'] = "Message Not Found";
+                $array['body'] = "You did something wrong....";
+            }elseif(!$array['wrapper'])
             {
                 echo html_entity_decode($array['body'], ENT_QUOTES);
                 die();
@@ -72,7 +82,7 @@ switch($type)
         }else
         {
             $array['name'] = "Message Not Found";
-            $array['body'] = "You did something wrong.....<br />".$conn->error;
+            $array['body'] = "You did something wrong.....<br />".htmlspecialchars($stmt->error, ENT_QUOTES);
         }
         break;
     default:
@@ -119,7 +129,7 @@ function gen_rss($file, $max)
         {
             if($max == $key){break;}
             $i_title = $feed['_c']['title']['_v'];
-            $i_desc = trim(str_replace( "<br/><br/><br/>", "", str_replace( "&deg;", utf8_encode(html_entity_decode("&#176;")), str_replace("&nbsp;", utf8_encode(" "), htmlspecialchars_decode( $feed['_c']['summary']['_v'] )))));
+            $i_desc = trim(str_replace( "<br/><br/><br/>", "", str_replace( "&deg;", mb_convert_encoding(html_entity_decode("&#176;"), 'UTF-8', 'ISO-8859-1'), str_replace("&nbsp;", " ", htmlspecialchars_decode( $feed['_c']['summary']['_v'] )))));
             if($x == 0)
             {
                 $body .= "<tr>
@@ -162,11 +172,11 @@ function gen_rss($file, $max)
             if(@$feed['_c']['content:encoded']['_v'])
             {
                 $i_title = $feed['_c']['title']['_v'];
-                $i_desc = trim(str_replace("<br/><br/><br/>", "", str_replace("&deg;",utf8_encode(html_entity_decode("&#176;")), str_replace("&nbsp;", utf8_encode(" "), htmlspecialchars_decode($feed['_c']['content:encoded']['_v'], ENT_NOQUOTES)))));
+                $i_desc = trim(str_replace("<br/><br/><br/>", "", str_replace("&deg;",mb_convert_encoding(html_entity_decode("&#176;"), 'UTF-8', 'ISO-8859-1'), str_replace("&nbsp;", " ", htmlspecialchars_decode($feed['_c']['content:encoded']['_v'], ENT_NOQUOTES)))));
             }else
             {
                 $i_title = $feed['_c']['title']['_v'];
-                $i_desc = trim(str_replace("<br/><br/><br/>", "", str_replace("&deg;",utf8_encode(html_entity_decode("&#176;")),str_replace("&nbsp;", utf8_encode(" "), htmlspecialchars_decode($feed['_c']['description']['_v'], ENT_NOQUOTES)))));
+                $i_desc = trim(str_replace("<br/><br/><br/>", "", str_replace("&deg;",mb_convert_encoding(html_entity_decode("&#176;"), 'UTF-8', 'ISO-8859-1'),str_replace("&nbsp;", " ", htmlspecialchars_decode($feed['_c']['description']['_v'], ENT_NOQUOTES)))));
             }
             if($x == 0)
             {

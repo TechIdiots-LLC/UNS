@@ -16,6 +16,7 @@ $max_conn_hist  = 10;                       			# The Maximum number of Connectio
 $lpt_set_app    = '';     								# Bin for the LPT LED blinker
 $lpt_read_app   = ''; 									# Bin for LPT value reader
 $led_blink      = 0;                         			# Variable to turn on the LPT LED blinking
+$mysql_dump_bin = 'mysqldump';							# Name or location of the mysqldump binary, used by the admin backup/restore feature
 
 # The Template variables for RSS feeds
 $template_head_rss = '<html>

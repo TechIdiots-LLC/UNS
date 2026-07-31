@@ -25,7 +25,7 @@ $reg_url = $GLOBALS['reg_url'];
 
 if(!check_install('.'))
 {
-    echo "You need to Install or Upgrade first.<br /><a href='../install.php'>Install Page</a>";
+    echo "You need to Install or Upgrade first.<br /><a href='install.php'>Install Page</a>";
     die();
 }
 date_default_timezone_set($TZ);
@@ -95,12 +95,14 @@ if($out != "")
 ';
                 include "configs/conn.php";
                 $conn = new mysqli($server, $username, $password, $db);
-                $result = $conn->query("SELECT friendly.friendly,friendly.client FROM allowed_clients,friendly WHERE friendly.client = allowed_clients.client_name ORDER by friendly.friendly ASC", 1);
+                $result = $conn->query("SELECT friendly.friendly,friendly.client FROM allowed_clients,friendly WHERE friendly.client = allowed_clients.client_name ORDER by friendly.friendly ASC", MYSQLI_STORE_RESULT);
                 $NN=0;
                 $data = "<clients>\r\n";
-                while($clients = $result->fetch_array(1))
+                while($clients = $result->fetch_array(MYSQLI_ASSOC))
                 {
-                    $data .= '   <client ref="'.$reg_url.'index.php?id='.$clients['client'].'" id="'.$clients['client'].'">'.$clients['friendly'].'</client>
+                    $client_esc = htmlspecialchars($clients['client'], ENT_QUOTES);
+                    $friendly_esc = htmlspecialchars($clients['friendly'], ENT_QUOTES);
+                    $data .= '   <client ref="'.$reg_url.'index.php?id='.$client_esc.'" id="'.$client_esc.'">'.$friendly_esc.'</client>
 ';
                     $NN++;
                 }
@@ -149,14 +151,16 @@ if($out != "")
         $head = $scroll_code;
         $body = '<div align="center"><table width="75%"><tr><th>Clients</th></tr>';
         $conn = new mysqli($server, $username, $password, $db);
-        $result = $conn->query("SELECT friendly.friendly,friendly.client FROM allowed_clients,friendly WHERE friendly.client = allowed_clients.client_name ORDER by friendly.friendly ASC", 1);
+        $result = $conn->query("SELECT friendly.friendly,friendly.client FROM allowed_clients,friendly WHERE friendly.client = allowed_clients.client_name ORDER by friendly.friendly ASC", MYSQLI_STORE_RESULT);
         $NN=0;
-        while($clients = $result->fetch_array(1))
+        while($clients = $result->fetch_array(MYSQLI_ASSOC))
         {
+            $client_esc = htmlspecialchars($clients['client'], ENT_QUOTES);
+            $friendly_esc = htmlspecialchars($clients['friendly'], ENT_QUOTES);
             $body .= '
             <tr>
                 <td>
-                    <a href="'.$reg_url.'index.php?id='.$clients['client'].'" target="_blank">'.$clients['friendly'].'</a>
+                    <a href="'.$reg_url.'index.php?id='.$client_esc.'" target="_blank">'.$friendly_esc.'</a>
                 </td>
             </tr>';
             $NN++;
@@ -188,8 +192,17 @@ if($out != "")
 #####
 ## Functions
 #####
+# Client IDs become part of a dynamically-named table ("<id>_links"), which can't be
+# parameterized in a prepared statement - so it's validated against a strict whitelist
+# instead, both here and in get_client_url()/check_conn_tbl().
+function is_safe_client_id($client)
+{
+    return is_string($client) && $client !== "" && preg_match('/^[A-Za-z0-9_]+$/', $client) === 1;
+}
+
 function get_client_led_id($client)
 {
+    if(!is_safe_client_id($client)){return 0;}
     include "configs/conn.php";
     $conn = new mysqli($server, $username, $password, $db);
     if(mysqli_connect_errno())
@@ -197,10 +210,11 @@ function get_client_led_id($client)
         printf("Connect failed: %s\n", mysqli_connect_error());
         exit();
     }
-    $query = "SELECT led FROM `allowed_clients` where `client_name` LIKE '$client'";
-    $result = $conn->query($query, 1);
-    $array = $result->fetch_array(1);
-    if(!$array['led'])
+    $stmt = $conn->prepare("SELECT led FROM `allowed_clients` where `client_name` = ?");
+    $stmt->bind_param("s", $client);
+    $stmt->execute();
+    $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+    if(empty($array['led']))
     {
         return 0;
     }else
@@ -218,70 +232,73 @@ function get_client_url($client)
     {
         return array(mysqli_connect_error(), 0);
     }
-    $query = "SELECT * FROM `allowed_clients` where `client_name` LIKE '$client'";
-    $result = $conn->query($query, 1);
-    $array = $result->fetch_array(1);
-    $cl_id = $array['id'];
-
-    if(!$array['client_name'])
+    if(!is_safe_client_id($client))
     {
         return array("bad_client", 0);
     }
-    $result->free();
-    $query = "SELECT * FROM `settings`";
-    $result = $conn->query($query, 1);
-    $array = $result->fetch_array(1);
+    $stmt = $conn->prepare("SELECT * FROM `allowed_clients` where `client_name` = ?");
+    $stmt->bind_param("s", $client);
+    $stmt->execute();
+    $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+    $cl_id = $array['id'] ?? 0;
+
+    if(empty($array['client_name']))
+    {
+        return array("bad_client", 0);
+    }
+    $result = $conn->query("SELECT * FROM `settings`", MYSQLI_STORE_RESULT);
+    $array = $result->fetch_array(MYSQLI_ASSOC);
     $emerg_fl = $array['emerg'];
     if(!$emerg_fl)
     {
-        $result->free();
-        $query = "SELECT * FROM `connections` where `client` LIKE '$client' ORDER by `last_conn` DESC LIMIT 1";
-        $result = $conn->query($query, 1);
-        if($result)
+        $stmt = $conn->prepare("SELECT * FROM `connections` where `client` = ? ORDER by `last_conn` DESC LIMIT 1");
+        $stmt->bind_param("s", $client);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        if($result && $result->num_rows > 0)
         {
-            $prev = $result->fetch_array(1);
+            $prev = $result->fetch_array(MYSQLI_ASSOC);
             $prev_url = $prev['last_url'];
-            $query = "SELECT * FROM `".$client."_links` where `disabled` NOT LIKE '1' AND `url` NOT LIKE '$prev_url'";
-            $result->free();
-            $result = $conn->query($query, 1);
-            while($array = $result->fetch_array(1))
+            # $client is whitelisted to [A-Za-z0-9_]+ above, so it's safe to use as a table name here.
+            $stmt = $conn->prepare("SELECT * FROM `".$client."_links` where `disabled` != '1' AND `url` != ?");
+            $stmt->bind_param("s", $prev_url);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            while($array = $result->fetch_array(MYSQLI_ASSOC))
             {
                 $ret[] = array($array['url'], $array['refresh']);
             }
 
-            if(@$ret[0] == "")
+            if(empty($ret[0]))
             {
-                $query = "SELECT * FROM `".$client."_links` where `disabled` NOT LIKE '1'";
-                $result->free();
-                $result = $conn->query($query, 1);
-                while($array = $result->fetch_array(1))
+                $result = $conn->query("SELECT * FROM `".$client."_links` where `disabled` != '1'", MYSQLI_STORE_RESULT);
+                while($array = $result->fetch_array(MYSQLI_ASSOC))
                 {
                     $ret[] = array($array['url'], $array['refresh']);
                 }
             }
         }else
         {
-            $query = "SELECT * FROM `".$client."_links` where `disabled` NOT LIKE '1'";
-            $result->free();
-            $result = $conn->query($query, 1);
-            while($array = $result->fetch_array(1))
+            $result = $conn->query("SELECT * FROM `".$client."_links` where `disabled` != '1'", MYSQLI_STORE_RESULT);
+            while($array = $result->fetch_array(MYSQLI_ASSOC))
             {
                 $ret[] = array($array['url'], $array['refresh']);
             }
         }
-        
+
     }else
     {
-        $result->free();
-        $query = "SELECT * FROM `emerg` WHERE `cl_id` = '$cl_id' OR `cl_id` = '0' AND `enabled` = '1'";
-        $result = $conn->query($query, 1);
-        
-        while($array = $result->fetch_array(1))
+        $stmt = $conn->prepare("SELECT * FROM `emerg` WHERE `cl_id` = ? OR `cl_id` = '0' AND `enabled` = '1'");
+        $stmt->bind_param("i", $cl_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+
+        while($array = $result->fetch_array(MYSQLI_ASSOC))
         {
             $ret[] = array($array['url'], $array['refresh'], 1);
         }
     }
-    if(@$ret[0] == "")
+    if(empty($ret[0]))
     {
         $ret1 = array("no_urls", 0);
     }else
@@ -292,8 +309,9 @@ function get_client_url($client)
     $time = time();
     $last_url = $ret1[0];
     check_conn_tbl($client);
-    $sql = "INSERT INTO `connections` (`id`, `client`, `last_conn`, `last_url`) VALUES ('', '$client', '$time', '$last_url')";
-    if(!$conn->query($sql))
+    $stmt = $conn->prepare("INSERT INTO `connections` (`client`, `last_conn`, `last_url`) VALUES (?, ?, ?)");
+    $stmt->bind_param("sis", $client, $time, $last_url);
+    if(!$stmt->execute())
     {
         return array($conn->error, 0);
     }
@@ -312,23 +330,27 @@ function get_client_url($client)
 
 function check_conn_tbl($client)
 {
+    if(!is_safe_client_id($client)){return -1;}
     include "configs/vars.php";
     include "configs/conn.php";
     if(!$conn = mysqli_connect($server, $username, $password, $db))
     {return -1;}
-    $sql = "SELECT * FROM `connections` WHERE `client` = '$client'";
-    if(!($result = mysqli_query($conn, $sql)))
-    {return -1;}
-    $rows = mysqli_num_rows($result);
+    $stmt = $conn->prepare("SELECT * FROM `connections` WHERE `client` = ?");
+    $stmt->bind_param("s", $client);
+    if(!$stmt->execute()){return -1;}
+    $result = $stmt->get_result();
+    $rows = $result->num_rows;
     if($max_conn_hist == $rows)
     {
-        $sql = "SELECT id FROM `connections` WHERE `client` = '$client' ORDER BY `last_conn` ASC LIMIT 1";
-        $result = mysqli_query($conn, $sql);
-        while($array = mysqli_fetch_array($result))
+        $stmt = $conn->prepare("SELECT id FROM `connections` WHERE `client` = ? ORDER BY `last_conn` ASC LIMIT 1");
+        $stmt->bind_param("s", $client);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        while($array = $result->fetch_array(MYSQLI_ASSOC))
         {
-            $sql = "DELETE FROM `connections` WHERE `id` = '".$array['id']."'";
-            $result1 = mysqli_query($conn, $sql);
-            if(!$result1){return -1;}
+            $del_stmt = $conn->prepare("DELETE FROM `connections` WHERE `id` = ?");
+            $del_stmt->bind_param("i", $array['id']);
+            if(!$del_stmt->execute()){return -1;}
         }
         return 1;
     }else

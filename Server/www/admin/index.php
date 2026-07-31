@@ -46,15 +46,21 @@ if($func_1 === "logout")
     {
         include "../configs/conn.php";
         $conn = new mysqli($server, $username, $password, $db);
-        $cookie_exp = explode(":", $_COOKIE['login_yes']);
+        $cookie_exp = explode(":", filter_input(INPUT_COOKIE, 'login_yes', FILTER_SANITIZE_SPECIAL_CHARS));
         $cookie_hash = $cookie_exp[0];
 
-        $sql = "SELECT * FROM `hash_links` where `hash` like '$cookie_hash'";
-        $result = $conn->query($sql, 1);
-        $links = $result->fetch_array(1);
-        $result->free();
-        $sql = "DELETE FROM `hash_links` where `id` = '".$links['id']."'";
-        if($conn->query($sql))
+        $stmt = $conn->prepare("SELECT * FROM `hash_links` where `hash` = ?");
+        $stmt->bind_param("s", $cookie_hash);
+        $stmt->execute();
+        $links = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+        $del_ok = true;
+        if(!empty($links['id']))
+        {
+            $del_stmt = $conn->prepare("DELETE FROM `hash_links` where `id` = ?");
+            $del_stmt->bind_param("i", $links['id']);
+            $del_ok = $del_stmt->execute();
+        }
+        if($del_ok)
         {
             if(setcookie("login_yes", "", time()-3600 , "/".$root."admin", '', $SSL, 1))
             {echo "Logged out";
@@ -64,7 +70,7 @@ if($func_1 === "logout")
             die();}
         }else
         {
-            setcookie("login_yes", "", $time , "/".$root."admin", '', $SSL, 1);
+            setcookie("login_yes", "", time()-3600 , "/".$root."admin", '', $SSL, 1);
             echo "Failed to remove session from table.";
             die();
         }
@@ -95,10 +101,8 @@ if($GET_login)
         login_form("Password cannot be Blank.");
     }
     $conn = new mysqli($server, $username, $password, $db);
-    $sql = "SELECT * FROM `settings` limit 1";
-    $result = $conn->query($sql, 1);
-    $settings = $result->fetch_array(1);
-    $result->free();
+    $result = $conn->query("SELECT * FROM `settings` limit 1", MYSQLI_STORE_RESULT);
+    $settings = $result->fetch_array(MYSQLI_ASSOC);
     if($LDAP)
     {
         $internal = 0;
@@ -112,13 +116,14 @@ if($GET_login)
         {
             $user = $usr_exp[1];
             $u_domain = $usr_exp[0];
-            $sql = "SELECT * FROM `allowed_users` where `domain` LIKE '$u_domain' AND `username` = '$user'";
-            $result = $conn->query($sql, 1);
-            $array = $result->fetch_array(1);
-            if($user == $array['username'])
+            $stmt = $conn->prepare("SELECT * FROM `allowed_users` where `domain` = ? AND `username` = ?");
+            $stmt->bind_param("ss", $u_domain, $user);
+            $stmt->execute();
+            $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+            if($array && $user == $array['username'])
             {
                 $ldap = ldap_connect($domain, $port);
-                $bind = ldap_bind($ldap, $usr, $pwd);
+                $bind = @ldap_bind($ldap, $usr, $pwd);
                 if(!$bind){ login_form("Error: Failed to connect to $domain."); }
                 ldap_unbind($ldap);
                 if(create_cookie($array['username']))
@@ -134,31 +139,41 @@ if($GET_login)
             }
         }
     }
-    $sql = "SELECT * FROM `allowed_users` where `username` LIKE '$usr'";
-    #var_dump($sql); echo"<br />";
-    $result = $conn->query($sql, 1);
-    $array = $result->fetch_array(1);
-    if($usr == $array['username'])
+    $stmt = $conn->prepare("SELECT * FROM `allowed_users` where `username` = ?");
+    $stmt->bind_param("s", $usr);
+    $stmt->execute();
+    $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+    if($array && $usr == $array['username'])
     {
         if(!$settings['built_in_admin'] && $usr == "unsadmin")
         {
-            #echo $pwd."---".$seed; echo"<br />";
-            $pwd = md5($pwd.$seed);
-            #echo $pwd."<br />";;
-            $result->free();
-            $sql = "SELECT `username`,`password` FROM `internal_users` where `username` = '$usr'";
-            #echo $sql."<br />";
-            $result = $conn->query($sql, 1);
-            $array = $result->fetch_array(1);
-            #echo "$pwd == ".$array['password'];
-            if($pwd == $array['password'])
+            $stmt = $conn->prepare("SELECT `username`,`password` FROM `internal_users` where `username` = ?");
+            $stmt->bind_param("s", $usr);
+            $stmt->execute();
+            $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+            $stored_pwd = $array['password'] ?? '';
+            $valid = false;
+            if($stored_pwd !== '' && password_get_info($stored_pwd)['algo'] !== null)
+            {
+                # modern password_hash() format
+                $valid = password_verify($pwd, $stored_pwd);
+            }elseif($stored_pwd !== '' && hash_equals($stored_pwd, md5($pwd.$seed)))
+            {
+                # legacy md5(password.seed) format - accept it, then opportunistically upgrade
+                $valid = true;
+                $new_hash = password_hash($pwd, PASSWORD_DEFAULT);
+                $upd_stmt = $conn->prepare("UPDATE `internal_users` SET `password` = ? WHERE `username` = ?");
+                $upd_stmt->bind_param("ss", $new_hash, $usr);
+                $upd_stmt->execute();
+            }
+            if($valid)
             {
                 if($cook = create_cookie($array['username']))
                 {echo "Logged In!";}else{login_form("cookie failed: ".$cook);}
             }
             else{login_form("Login Failed.");}
 
-        }elseif($settings['built_in_admin'] && $user == "unsadmin")
+        }elseif($settings['built_in_admin'] && $usr == "unsadmin")
         {
             login_form("User is Disabled.");
         }
@@ -180,13 +195,17 @@ if(login_check())
     include "../configs/conn.php";
     $cookie = explode(":", filter_input(INPUT_COOKIE, 'login_yes', FILTER_SANITIZE_SPECIAL_CHARS));
     $cookie_hash = $cookie[0];
-    $cookie_user = $cookie[1];
     $conn = new mysqli($server, $username, $password, $db);
-    $sql = "SELECT * FROM `hash_links` where `hash` = '$cookie_hash'";
-    $result = $conn->query($sql, 1);
-    $hash = $result->fetch_array(1);
-    $ID = $hash['id'];
-    if(time() < $hash['time'])
+    $stmt = $conn->prepare("SELECT * FROM `hash_links` where `hash` = ?");
+    $stmt->bind_param("s", $cookie_hash);
+    $stmt->execute();
+    $hash = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+    $ID = $hash['id'] ?? null;
+    # The username is always taken from the server-side hash_links row, never from the
+    # client-supplied cookie value - otherwise anyone with any valid session hash could
+    # edit their own cookie to claim to be a different (eg. admin) user.
+    $cookie_user = $hash['user'] ?? null;
+    if($ID !== null && $cookie_user !== null && time() < $hash['time'])
     {
         ?>
 <html>
@@ -196,11 +215,11 @@ if(login_check())
     </head>
     <body class="main_body">
         <?php
-        $result->free();
-        $sql = "SELECT tz FROM `allowed_users` where `username` = '$cookie_user'";
-        $result = $conn->query($sql, 1);
-        $tx_array = $result->fetch_array(1);
-        $exp = explode(":", $tx_array['tz']);
+        $stmt = $conn->prepare("SELECT tz FROM `allowed_users` where `username` = ?");
+        $stmt->bind_param("s", $cookie_user);
+        $stmt->execute();
+        $tx_array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+        $exp = explode(":", $tx_array['tz'] ?? 'ewt:0');
         $tz_list = timezone_abbreviations_list();
         date_default_timezone_set($tz_list[$exp[0]][$exp[1]]["timezone_id"]);
         $func = filter_input(INPUT_GET, 'func', FILTER_SANITIZE_SPECIAL_CHARS);
@@ -210,9 +229,10 @@ if(login_check())
         if($root == "" or $root == "/"){$path = "/admin";}else{$path = "/".$root."admin";}
         setcookie("login_yes", "", time()-3600 , $path, '', $SSL, 1);
         login_form("Session timed out. Log In Again.");
-        $sql = "DELETE FROM `$db`.`hash_links` where `time` < '".time()."'";
-        $result->free();
-        if(!($result = $conn->query($sql)))
+        $now = time();
+        $del_stmt = $conn->prepare("DELETE FROM `hash_links` where `time` < ?");
+        $del_stmt->bind_param("i", $now);
+        if(!$del_stmt->execute())
         {
             echo $conn->error;
         }
@@ -258,11 +278,12 @@ function admin_panel($usr, $func, $proto)
                 <form name="tz_change" action="?func=chg_tz" method="POST">
                     <select name="cl_timezone" onchange='this.form.submit()'>
                     <?php
-                    $sql = "SELECT `tz` FROM `allowed_users` where `username` LIKE '$usr'";
-                    $result = $conn->query($sql,1);
-                    $array = $result->fetch_array(1);
-                    $user_TZ = explode(":",$array['tz']);
-                    echo $array['tz'];
+                    $stmt = $conn->prepare("SELECT `tz` FROM `allowed_users` where `username` = ?");
+                    $stmt->bind_param("s", $usr);
+                    $stmt->execute();
+                    $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                    $user_TZ = explode(":", $array['tz'] ?? 'ewt:0');
+                    echo htmlspecialchars($array['tz'] ?? '', ENT_QUOTES);
                     foreach(timezone_abbreviations_list() as $key=>$TZ_L)
                     {
                         foreach($TZ_L as $key1=>$TL)
@@ -284,10 +305,8 @@ function admin_panel($usr, $func, $proto)
     </table>
     
     <?php
-    $result->free();
-    $sql = "SELECT `emerg` FROM `settings` LIMIT 1";
-    $result = $conn->query($sql, 1);
-    $emerg = $result->fetch_array(1);
+    $result = $conn->query("SELECT `emerg` FROM `settings` LIMIT 1", MYSQLI_STORE_RESULT);
+    $emerg = $result->fetch_array(MYSQLI_ASSOC);
     if($emerg['emerg'])
     {
         ?>
@@ -298,10 +317,10 @@ function admin_panel($usr, $func, $proto)
         </table>
         <?php
     }
-    $result->free();
-    $sql = "SELECT * FROM `allowed_users` where `username` like '$usr'";
-    $result = $conn->query($sql, 1);
-    $perms = $result->fetch_array(1);
+    $stmt = $conn->prepare("SELECT * FROM `allowed_users` where `username` = ?");
+    $stmt->bind_param("s", $usr);
+    $stmt->execute();
+    $perms = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
     #############
     $o=0;
     if($perms['edit_urls'])
@@ -406,9 +425,9 @@ function admin_panel($usr, $func, $proto)
     {
         case "chg_tz":
             $cl_timezone = filter_input(INPUT_POST, 'cl_timezone', FILTER_SANITIZE_SPECIAL_CHARS);
-            $sql = "UPDATE `allowed_users` SET `tz` = '$cl_timezone' WHERE `username` = '$usr'";
-            $result->free();
-            if($conn->query($sql))
+            $stmt = $conn->prepare("UPDATE `allowed_users` SET `tz` = ? WHERE `username` = ?");
+            $stmt->bind_param("ss", $cl_timezone, $usr);
+            if($stmt->execute())
             {
                 echo "Changed Time Zone.";
                 ?>
@@ -418,18 +437,30 @@ function admin_panel($usr, $func, $proto)
                 <?php
             }else
             {
-                echo "Failed to Change Time Zone.<br />\r\n".$conn->error;
+                echo "Failed to Change Time Zone.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
             }
             break;
         case "del_backup":
-            foreach($_POST['remove'] as $rem)
+            if(!empty($_POST['remove']) && is_array($_POST['remove']))
             {
-                if(unlink(getcwd()."/backups/".str_replace("../", "", $rem)))
+                foreach($_POST['remove'] as $rem)
                 {
-                    echo "Removed Old DB dump ($rem)<br/>";
-                }else
-                {
-                    echo "Failed to Remove Old DB dump ($rem)<br />";
+                    # strip any path components entirely rather than trying to blacklist "../" -
+                    # naive substring stripping can be bypassed (eg. "....//") and doesn't
+                    # account for "\" on Windows.
+                    $rem = basename(str_replace('\\', '/', (string)$rem));
+                    if($rem === '' || !preg_match('/^[A-Za-z0-9_.-]+\.sql$/', $rem))
+                    {
+                        echo "Skipped invalid filename.<br/>";
+                        continue;
+                    }
+                    if(unlink(getcwd()."/backups/".$rem))
+                    {
+                        echo "Removed Old DB dump (".htmlspecialchars($rem, ENT_QUOTES).")<br/>";
+                    }else
+                    {
+                        echo "Failed to Remove Old DB dump (".htmlspecialchars($rem, ENT_QUOTES).")<br />";
+                    }
                 }
             }
             break;
@@ -477,8 +508,7 @@ function admin_panel($usr, $func, $proto)
             $bk_files = array();
             while (($file = readdir($dh)) !== false)
             {
-                $file_e = explode(".", $file);
-                if($file_e[1] != "sql")continue;
+                if(strtolower(pathinfo($file, PATHINFO_EXTENSION)) !== "sql"){continue;}
                 $bk_files[] = $file;
             }
             closedir($dh);
@@ -490,7 +520,8 @@ function admin_panel($usr, $func, $proto)
             <?php
             foreach($bk_files as $file)
             {
-                echo "<tr class='client_table_body'><td align='center'><a href='".$admin_url."admin/backups/$file'>$file</a></td><td align='center'>".format_bytes(filesize($dir.$file))."</td><td align='center'><input type='checkbox' name='remove[]' value='$file'></td></tr>";
+                $file_esc = htmlspecialchars($file, ENT_QUOTES);
+                echo "<tr class='client_table_body'><td align='center'><a href='".$admin_url."admin/backups/$file_esc'>$file_esc</a></td><td align='center'>".format_bytes(filesize($dir.$file))."</td><td align='center'><input type='checkbox' name='remove[]' value='$file_esc'></td></tr>";
             }
             ?>
                 <tr>
@@ -507,13 +538,12 @@ function admin_panel($usr, $func, $proto)
             $filename = 'UNS_'.date("Y-m-d-H-i-s") . '.sql';
             $backupFile = $bak_fldr.$filename;
 
-            $command = $mysql_dump_bin." -v -h $server -u $username --password=$password -B $db>$backupFile";
-            #echo $command."<Br />";
+            $command = escapeshellcmd($mysql_dump_bin)." -v -h ".escapeshellarg($server)." -u ".escapeshellarg($username)." --password=".escapeshellarg($password)." -B ".escapeshellarg($db).">".escapeshellarg($backupFile);
             exec($command,$sys, $ret);
 
             if(@filesize($backupFile) > 0)
             {
-                echo "Backed up to <a href='".$admin_url."admin/backups/".$filename."' target='_blank'>$filename</a><br /><a href='javascript:history.go(-1)'>Go back</a>";
+                echo "Backed up to <a href='".$admin_url."admin/backups/".htmlspecialchars($filename, ENT_QUOTES)."' target='_blank'>".htmlspecialchars($filename, ENT_QUOTES)."</a><br /><a href='javascript:history.go(-1)'>Go back</a>";
                 ?>
     <!--<script>
         setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=edit_options'",<?php echo $page_timeout;?>);
@@ -526,10 +556,12 @@ function admin_panel($usr, $func, $proto)
             break;
         case "restore":
             $restore = $_FILES['restore_sql']['tmp_name'];
-            $saved = getcwd().'/restores/'.$_FILES['restore_sql']['name'];
-            $ext = strstr($saved, ".sql");
-            if($ext != ".sql"){echo "Wrong File type.<br/>";break;}
-            $command = "mysql -h $server -u $username --password=$password < $saved";
+            # basename() strips any directory components the client-supplied filename might
+            # contain - without it this was an arbitrary-file-write (upload "../../x.sql" etc).
+            $restore_name = basename(str_replace('\\', '/', (string)$_FILES['restore_sql']['name']));
+            $saved = getcwd().'/restores/'.$restore_name;
+            if(strtolower(pathinfo($restore_name, PATHINFO_EXTENSION)) !== "sql"){echo "Wrong File type.<br/>";break;}
+            $command = "mysql -h ".escapeshellarg($server)." -u ".escapeshellarg($username)." --password=".escapeshellarg($password)." < ".escapeshellarg($saved);
             if(move_uploaded_file($restore, $saved))
             {
                 $sys = system($command, $ret);
@@ -568,50 +600,48 @@ function admin_panel($usr, $func, $proto)
 
             $mysql_dump_binary = @filter_input(INPUT_POST, 'mysql_dump', FILTER_SANITIZE_ENCODED);
 
-            $vars_file = "<?php
-$"."name_title     = '$uns_name';                    # Name of your Install, Will be displayed on all papes
-$"."host           = '$hostname';              # The HTTP server the clients will connect to.
-$"."root           = '$root1';                   # Folder UNS lives in
-$"."timeout        = ($timeout1);                   # Cookie Time out
-$"."SSL            = $SSL1;                        # Cookie SSL only?
-$"."domain         = '$domain1';    # LDAP Domain to connect to for user authentication
-$"."port           = $domain_port1;                     # LDAP Port
-$"."TZ             = '$TZ';                    # Local Time Zone
-$"."page_timeout   = $page_timeout1;                        # Refresh time for page to forward in seconds.
-$"."refresh        = $refresh1;                       # Time for client pages to refresh.
-$"."seed           = '$seed';     # Only used for internal user logins, to hash the password and store that.
-$"."LDAP           = $ldap1;                        # If this flag is set, internal users will be overridden, except for the Admin.
-$"."max_archives   = $max_arch1;                       # The Maximum number of Archived URL lists that will be kept before the oldest is killed
-$"."max_conn_hist  = $max_conns1;                       # The Maximum number of Connection histories that will be kept per client.
-$"."lpt_read_app   = '$portctl';
-$"."lpt_set_app    = '$lpt_binary';
-$"."led_blink      = $leds;
-$"."mysql_dump_bin = '$mysql_dump_binary';
-
-# The Template variables for RSS feeds
-$"."template_head_rss = '$template_head_rss';
-
-$"."template_foot_rss = '$template_foot_rss';
-
-# The Template variables for Custom Messages
-$"."template_head_cmsg = '$template_head_cmsg';
-
-$"."template_foot_cmsg = '$template_foot_cmsg';
-?>";
+            # var_export() is used for every value below (rather than interpolating raw
+            # strings into single-quoted PHP literals) - these files get written to disk and
+            # then include()'d on every request, so a submitted value containing a stray quote
+            # or backslash could otherwise inject arbitrary PHP code into the running app.
+            $vars_file = "<?php\n"
+                ."\$name_title     = ".var_export($uns_name, true)."; # Name of your Install, Will be displayed on all pages\n"
+                ."\$host           = ".var_export($hostname, true)."; # The HTTP server the clients will connect to.\n"
+                ."\$root           = ".var_export($root1, true)."; # Folder UNS lives in\n"
+                ."\$timeout        = ($timeout1); # Cookie Time out\n"
+                ."\$SSL            = $SSL1; # Cookie SSL only?\n"
+                ."\$domain         = ".var_export($domain1, true)."; # LDAP Domain to connect to for user authentication\n"
+                ."\$port           = $domain_port1; # LDAP Port\n"
+                ."\$TZ             = ".var_export($TZ, true)."; # Local Time Zone\n"
+                ."\$page_timeout   = $page_timeout1; # Refresh time for page to forward in seconds.\n"
+                ."\$refresh        = $refresh1; # Time for client pages to refresh.\n"
+                ."\$seed           = ".var_export($seed, true)."; # Only used for internal user logins, to hash the password and store that.\n"
+                ."\$LDAP           = $ldap1; # If this flag is set, internal users will be overridden, except for the Admin.\n"
+                ."\$max_archives   = $max_arch1; # The Maximum number of Archived URL lists that will be kept before the oldest is killed\n"
+                ."\$max_conn_hist  = $max_conns1; # The Maximum number of Connection histories that will be kept per client.\n"
+                ."\$lpt_read_app   = ".var_export($portctl, true)."; # Bin for LPT value reader\n"
+                ."\$lpt_set_app    = ".var_export($lpt_binary, true)."; # Bin for the LPT LED blinker\n"
+                ."\$led_blink      = $leds; # Variable to turn on the LPT LED blinking\n"
+                ."\$mysql_dump_bin = ".var_export($mysql_dump_binary, true)."; # Name or location of the mysqldump binary\n"
+                ."\n# The Template variables for RSS feeds\n"
+                ."\$template_head_rss = ".var_export($template_head_rss, true).";\n"
+                ."\$template_foot_rss = ".var_export($template_foot_rss, true).";\n"
+                ."\n# The Template variables for Custom Messages\n"
+                ."\$template_head_cmsg = ".var_export($template_head_cmsg, true).";\n"
+                ."\$template_foot_cmsg = ".var_export($template_foot_cmsg, true).";\n";
             $cwd = str_replace("admin","",getcwd());
-            
+
             if($fp = fopen($cwd."configs/vars.php", 'w+'))
             {fwrite($fp, $vars_file); fclose($fp);echo "Wrote Vars Config File.<br />";}
             else{echo "Failed to write Vars Config File.<br />";}
             sleep(1);
-            
-            $conn_file = '<?php
-$server = "'.$sql_host.'";  # MySQL Host
-$username = "'.$uns_sql_usr.'";      # User for UNS
-$password = "'.$uns_sql_pwd.'";      # Users password
-$db = "'.$db_name.'";            # Database with UNS tables
-?>';
-            
+
+            $conn_file = "<?php\n"
+                ."\$server = ".var_export($sql_host, true).";  # MySQL Host\n"
+                ."\$username = ".var_export($uns_sql_usr, true).";      # User for UNS\n"
+                ."\$password = ".var_export($uns_sql_pwd, true).";      # Users password\n"
+                ."\$db = ".var_export($db_name, true).";            # Database with UNS tables\n";
+
             if($fp1 = fopen($cwd."configs/conn.php", 'w+'))
             {fwrite($fp1, $conn_file);echo "Wrote Conn Config File.<br />";
             ?>
@@ -666,7 +696,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                     SQL Host
                                 </td>
                                 <td width="200px">
-                                    <input type="text" name="sql_host" style="width:100%" value="<?php echo html_entity_decode($server);?>"/>
+                                    <input type="text" name="sql_host" style="width:100%" value="<?php echo htmlspecialchars(html_entity_decode($server), ENT_QUOTES);?>"/>
                                 </td>
                             </tr>
                             <tr class="client_table_body">
@@ -845,10 +875,10 @@ $db = "'.$db_name.'";            # Database with UNS tables
                     case "add_rss":
                         $url = @filter_input(INPUT_POST, 'url_n', FILTER_SANITIZE_SPECIAL_CHARS);
                         $name = @filter_input(INPUT_POST, 'name_n', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $maxlines = @filter_input(INPUT_POST, 'maxlines_n', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $sql = "INSERT INTO `rss_feeds` (`id`, `name`, `url`, `maxlines`) VALUES ('', '$name', '$url', '$maxlines')";
-                        $result->free();
-                        if($conn->query($sql))
+                        $maxlines = (int)@filter_input(INPUT_POST, 'maxlines_n', FILTER_SANITIZE_SPECIAL_CHARS);
+                        $stmt = $conn->prepare("INSERT INTO `rss_feeds` (`name`, `url`, `maxlines`) VALUES (?, ?, ?)");
+                        $stmt->bind_param("ssi", $name, $url, $maxlines);
+                        if($stmt->execute())
                         {
                             echo "Added Feeds.";
                             ?>
@@ -858,7 +888,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <?php
                         }else
                         {
-                            echo "Failed to update Feeds<br />\r\n".$conn->error;
+                            echo "Failed to update Feeds<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                         }
                         break;
                     case "edit_rss":
@@ -875,57 +905,57 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             }
                             foreach($_POST['remove_'] as $key=>$del)
                             {
-                                $search = $reg_url."html/template.php?type=rss&#38;id=$del";
-                                $sql = "SELECT id FROM `emerg` WHERE `url` LIKE '$search'";
-                                $result->free();
-                                $result = $conn->query($sql,1);
-                                $id =  $result->fetch_array(1);
-                                if(@$id['id'])
+                                $del_esc = htmlspecialchars($del, ENT_QUOTES);
+                                $search = $reg_url."html/template.php?type=rss&id=$del";
+                                $stmt = $conn->prepare("SELECT id FROM `emerg` WHERE `url` = ?");
+                                $stmt->bind_param("s", $search);
+                                $stmt->execute();
+                                $id = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                if(!empty($id['id']))
                                 {
                                     echo "Found message in Emergency Table.....";
-                                    $sql = "DELETE FROM `emerg` WHERE `id` = '".$id['id']."'";
-                                    $result->free();
-                                    if($conn->query($sql))
+                                    $del_stmt = $conn->prepare("DELETE FROM `emerg` WHERE `id` = ?");
+                                    $del_stmt->bind_param("i", $id['id']);
+                                    if($del_stmt->execute())
                                     {echo "Removed!<br />";}
                                     else{echo "Failed to Remove<br />";}
-                                }else{echo "Custom Message [$del] was not in the Emergency Table<br />";}
+                                }else{echo "Custom Message [$del_esc] was not in the Emergency Table<br />";}
                                 #Gather client ids list.
-                                $sql = "SELECT client_name FROM `allowed_clients`";
-                                @$result->free();
-                                $result = $conn->query($sql,1);
+                                $result = $conn->query("SELECT client_name FROM `allowed_clients`", MYSQLI_STORE_RESULT);
                                 $cl_c = 0;
                                 #Check Client lists for Custom Messages
                                 $link = mysqli_connect($server, $username, $password, $db);
-                                while($clid = $result->fetch_array(1))
+                                while($clid = $result->fetch_array(MYSQLI_ASSOC))
                                 {
                                     $cl = $clid['client_name'];
-                                    $sql = "SELECT id FROM `".$cl."_links` WHERE `url` LIKE '%rss&#38;id=$del' LIMIT 1";
-                                    $result1 = mysqli_query($link, $sql);
-                                    $id =  @mysqli_fetch_array($result1);
-                                    if(@$id['id'])
+                                    if(!is_safe_client_id($cl)){continue;}
+                                    $like_pattern = '%rss&id='.$del;
+                                    $stmt1 = mysqli_prepare($link, "SELECT id FROM `".$cl."_links` WHERE `url` LIKE ? LIMIT 1");
+                                    mysqli_stmt_bind_param($stmt1, "s", $like_pattern);
+                                    mysqli_stmt_execute($stmt1);
+                                    $id = mysqli_fetch_array(mysqli_stmt_get_result($stmt1), MYSQLI_ASSOC);
+                                    if(!empty($id['id']))
                                     {
-                                        echo $id['id']."<br />";
-                                        if(@$id['id'])
-                                        {
-                                            echo "Found message in $cl Link Table.....";
-                                            $sql = "DELETE FROM `".$cl."_links` WHERE `id` = '".$id['id']."'";
-                                            if(mysqli_query($link, $sql))
-                                            {echo "Removed!<br />";}
-                                            else{echo "Failed to Remove<br />";}
-                                            $cl_c++;
-                                        }
+                                        echo (int)$id['id']."<br />";
+                                        echo "Found message in ".htmlspecialchars($cl, ENT_QUOTES)." Link Table.....";
+                                        $del_stmt1 = mysqli_prepare($link, "DELETE FROM `".$cl."_links` WHERE `id` = ?");
+                                        mysqli_stmt_bind_param($del_stmt1, "i", $id['id']);
+                                        if(mysqli_stmt_execute($del_stmt1))
+                                        {echo "Removed!<br />";}
+                                        else{echo "Failed to Remove<br />";}
+                                        $cl_c++;
                                     }else{echo "none<br />";}
                                     echo "<hr />";
                                 }
                                 mysqli_close($link);
-                                if(!$cl_c){echo "<br /><br />Couldnt Find Any Clients with Custom Message [$del]<br />";}
-                                else{echo "<br /><br />Found [$cl_c] Clients with Custom Message [$del].<br />";}
+                                if(!$cl_c){echo "<br /><br />Couldnt Find Any Clients with Custom Message [$del_esc]<br />";}
+                                else{echo "<br /><br />Found [$cl_c] Clients with Custom Message [$del_esc].<br />";}
                                 #remove Custom message
-                                $sql = "DELETE FROM `rss_feeds` WHERE `id` = '$del'";
-                                $result->free();
-                                if($conn->query($sql))
+                                $del_stmt2 = $conn->prepare("DELETE FROM `rss_feeds` WHERE `id` = ?");
+                                $del_stmt2->bind_param("i", $del);
+                                if($del_stmt2->execute())
                                 {
-                                    echo "Removed message [$del].";
+                                    echo "Removed message [$del_esc].";
                                     ?>
                         <script>
                             setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=rss_feeds'",<?php echo $page_timeout;?>);
@@ -933,22 +963,23 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                     <?php
                                 }else
                                 {
-                                    echo "Failed to Remove message [$del].<br />\r\n".$conn->error;
+                                    echo "Failed to Remove message [$del_esc].<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                                 }
                             }
                         }else
                         {
-                            $result->free();
                             foreach($_POST['id'] as $key=>$id)
                             {
                                 $url = $_POST['body'][$key];
                                 $name = $_POST['name'][$key];
-                                $maxlines = $_POST['maxlines'][$key];
-                                $sql = "UPDATE `rss_feeds` SET `name` = '$name', `url` = '$url', `maxlines` = '$maxlines' WHERE `id` = '$id'";
-                                echo $sql."<br />";
-                                if($conn->query($sql))
+                                $maxlines = (int)$_POST['maxlines'][$key];
+                                $stmt = $conn->prepare("UPDATE `rss_feeds` SET `name` = ?, `url` = ?, `maxlines` = ? WHERE `id` = ?");
+                                $stmt->bind_param("ssii", $name, $url, $maxlines, $id);
+                                $id_esc = htmlspecialchars((string)$id, ENT_QUOTES);
+                                $name_esc = htmlspecialchars((string)$name, ENT_QUOTES);
+                                if($stmt->execute())
                                 {
-                                    echo "Updated Feed [$id] ($name).";
+                                    echo "Updated Feed [$id_esc] ($name_esc).";
                                     ?>
                         <script>
                             setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=rss_feeds'",<?php echo $page_timeout;?>);
@@ -956,7 +987,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                     <?php
                                 }else
                                 {
-                                    echo "Failed to Update Feed [$id] ($name).<br />\r\n".$conn->error;
+                                    echo "Failed to Update Feed [$id_esc] ($name_esc).<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                                 }
                             }
                         }
@@ -1006,36 +1037,38 @@ $db = "'.$db_name.'";            # Database with UNS tables
                     </tr>
                     <?php
                         $link = mysqli_connect($server, $username, $password, $db);
-                        $sql = "SELECT * FROM `rss_feeds` ORDER by `name` ASC";
-                        $result = mysqli_query($link, $sql);
+                        $result = mysqli_query($link, "SELECT * FROM `rss_feeds` ORDER by `name` ASC");
                         if(mysqli_num_rows($result))
                         {
                             $tablerowid=0;
-                            while($links = mysqli_fetch_array($result))
+                            while($links = mysqli_fetch_array($result, MYSQLI_ASSOC))
                             {
+                                $rss_id = (int)$links['id'];
+                                $rss_name = htmlspecialchars($links['name'], ENT_QUOTES);
+                                $rss_url = htmlspecialchars($links['url'], ENT_QUOTES);
                             ?>
                         <tr class="client_table_body">
                             <td onclick="expandcontract('mesgRow<?php echo $tablerowid;?>','mesgClickIcon<?php echo $tablerowid;?>')"
                                 id="mesgClickIcon<?php echo $tablerowid;?>" style="cursor: pointer; cursor: hand;">+</td>
                             </td>
                             <td style="width:25%;">
-                                <input type="hidden" name="id[]" value="<?php echo $links['id'];?>"/>
-                                <input type="text" name="name[]" style="width:90%;" value="<?php echo $links['name'];?>"/>
+                                <input type="hidden" name="id[]" value="<?php echo $rss_id;?>"/>
+                                <input type="text" name="name[]" style="width:90%;" value="<?php echo $rss_name;?>"/>
                             </td>
                             <td>
-                                <input type="text" name="maxlines[]" style="width:45px;" value="<?php echo $links['maxlines'];?>"/>
+                                <input type="text" name="maxlines[]" style="width:45px;" value="<?php echo (int)$links['maxlines'];?>"/>
                             </td>
                             <td>
-                                <a class="links" href="<?php echo $reg_url;?>html/template.php?type=rss&id=<?php echo $links['id'];?>" target="_blank"><?php echo $reg_url;?>html/template.php?type=rss&id=<?php echo $links['id'];?></a>
+                                <a class="links" href="<?php echo $reg_url;?>html/template.php?type=rss&id=<?php echo $rss_id;?>" target="_blank"><?php echo $reg_url;?>html/template.php?type=rss&id=<?php echo $rss_id;?></a>
                             </td>
                             <td align="center">
-                                <input type="checkbox" name="remove_[]" value="<?php echo $links['id'];?>"/>
+                                <input type="checkbox" name="remove_[]" value="<?php echo $rss_id;?>"/>
                             </td>
                         </tr>
                         <tbody id="mesgRow<?php echo $tablerowid;?>" style="display:none">
                         <tr>
                             <td colspan="6">
-                                <input type="text" name="body[]" style="width:100%" value="<?php echo $links['url'];?>" />
+                                <input type="text" name="body[]" style="width:100%" value="<?php echo $rss_url;?>" />
                                 <br />
                                 <br />
                             </td>
@@ -1128,10 +1161,10 @@ $db = "'.$db_name.'";            # Database with UNS tables
                     case "add_messg":
                         $body = @filter_input(INPUT_POST, 'body_n', FILTER_SANITIZE_SPECIAL_CHARS);
                         $name = @filter_input(INPUT_POST, 'name_n', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $wrapper = @filter_input(INPUT_POST, 'wrapper', FILTER_SANITIZE_SPECIAL_CHARS)+0;
-                        $sql = "INSERT INTO `c_messages` (`id`, `name`, `body`, `wrapper`) VALUES ('', '$name', '$body', '$wrapper')";
-                        $result->free();
-                        if($conn->query($sql))
+                        $wrapper = (int)@filter_input(INPUT_POST, 'wrapper', FILTER_SANITIZE_SPECIAL_CHARS);
+                        $stmt = $conn->prepare("INSERT INTO `c_messages` (`name`, `body`, `wrapper`) VALUES (?, ?, ?)");
+                        $stmt->bind_param("ssi", $name, $body, $wrapper);
+                        if($stmt->execute())
                         {
                             echo "Updated message.";
                             ?>
@@ -1141,7 +1174,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <?php
                         }else
                         {
-                            echo "Failed to update message<br />\r\n".$conn->error;
+                            echo "Failed to update message<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                         }
                         break;
                     case "edit_messg":
@@ -1158,58 +1191,58 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             }
                             foreach($_POST['remove_'] as $key=>$del)
                             {
+                                $del_esc = htmlspecialchars($del, ENT_QUOTES);
                                 #Check Emerg for Custom messages
-                                $search = $reg_url."html/template.php?type=c_message&#38;id=$del";
-                                $sql = "SELECT id FROM `emerg` WHERE `url` LIKE '$search'";
-                                $result->free();
-                                $result = $conn->query($sql,1);
-                                $id =  $result->fetch_array(1);
-                                if(@$id['id'])
+                                $search = $reg_url."html/template.php?type=c_message&id=$del";
+                                $stmt = $conn->prepare("SELECT id FROM `emerg` WHERE `url` = ?");
+                                $stmt->bind_param("s", $search);
+                                $stmt->execute();
+                                $id = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                if(!empty($id['id']))
                                 {
                                     echo "Found message in Emergency Table.....";
-                                    $sql = "DELETE FROM `emerg` WHERE `id` = '".$id['id']."'";
-                                    $result->free();
-                                    if($conn->query($sql))
+                                    $del_stmt = $conn->prepare("DELETE FROM `emerg` WHERE `id` = ?");
+                                    $del_stmt->bind_param("i", $id['id']);
+                                    if($del_stmt->execute())
                                     {echo "Removed!<br />";}
                                     else{echo "Failed to Remove<br />";}
-                                }else{echo "Custom Message [$del] was not in the Emergency Table<br />";}
+                                }else{echo "Custom Message [$del_esc] was not in the Emergency Table<br />";}
                                 #Gather client ids list.
-                                $sql = "SELECT client_name FROM `allowed_clients`";
-                                @$result->free();
-                                $result = $conn->query($sql,1);
+                                $result = $conn->query("SELECT client_name FROM `allowed_clients`", MYSQLI_STORE_RESULT);
                                 $cl_c = 0;
                                 #Check Client lists for Custom Messages
                                 $link = mysqli_connect($server, $username, $password, $db);
-                                while($clid = $result->fetch_array(1))
+                                while($clid = $result->fetch_array(MYSQLI_ASSOC))
                                 {
                                     $cl = $clid['client_name'];
-                                    $sql = "SELECT id FROM `".$cl."_links` WHERE `url` LIKE '%c_message&#38;id=$del' LIMIT 1";
-                                    $result1 = mysqli_query($link, $sql);
-                                    $id =  @mysqli_fetch_array($result1);
-                                    if(@$id['id'])
+                                    if(!is_safe_client_id($cl)){continue;}
+                                    $like_pattern = '%c_message&id='.$del;
+                                    $stmt1 = mysqli_prepare($link, "SELECT id FROM `".$cl."_links` WHERE `url` LIKE ? LIMIT 1");
+                                    mysqli_stmt_bind_param($stmt1, "s", $like_pattern);
+                                    mysqli_stmt_execute($stmt1);
+                                    $id = mysqli_fetch_array(mysqli_stmt_get_result($stmt1), MYSQLI_ASSOC);
+                                    if(!empty($id['id']))
                                     {
-                                        echo $id['id']."<br />";
-                                        if(@$id['id'])
-                                        {
-                                            echo "Found message in $cl Link Table.....";
-                                            $sql = "DELETE FROM `".$cl."_links` WHERE `id` = '".$id['id']."'";
-                                            if(mysqli_query($link, $sql))
-                                            {echo "Removed!<br />";}
-                                            else{echo "Failed to Remove<br />";}
-                                            $cl_c++;
-                                        }
+                                        echo (int)$id['id']."<br />";
+                                        echo "Found message in ".htmlspecialchars($cl, ENT_QUOTES)." Link Table.....";
+                                        $del_stmt1 = mysqli_prepare($link, "DELETE FROM `".$cl."_links` WHERE `id` = ?");
+                                        mysqli_stmt_bind_param($del_stmt1, "i", $id['id']);
+                                        if(mysqli_stmt_execute($del_stmt1))
+                                        {echo "Removed!<br />";}
+                                        else{echo "Failed to Remove<br />";}
+                                        $cl_c++;
                                     }else{echo "none<br />";}
                                     echo "<hr />";
                                 }
                                 mysqli_close($link);
-                                if(!$cl_c){echo "<br /><br />Couldnt Find Any Clients with Custom Message [$del]<br />";}
-                                else{echo "<br /><br />Found [$cl_c] Clients with Custom Message [$del].<br />";}
+                                if(!$cl_c){echo "<br /><br />Couldnt Find Any Clients with Custom Message [$del_esc]<br />";}
+                                else{echo "<br /><br />Found [$cl_c] Clients with Custom Message [$del_esc].<br />";}
                                 #remove Custom message
-                                $sql = "DELETE FROM `c_messages` WHERE `id` = '$del'";
-                                $result->free();
-                                if($conn->query($sql))
+                                $del_stmt2 = $conn->prepare("DELETE FROM `c_messages` WHERE `id` = ?");
+                                $del_stmt2->bind_param("i", $del);
+                                if($del_stmt2->execute())
                                 {
-                                    echo "Removed message [$del].";
+                                    echo "Removed message [$del_esc].";
                                     ?>
                         <script>
                             setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=c_messages'",<?php echo $page_timeout;?>);
@@ -1217,7 +1250,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                     <?php
                                 }else
                                 {
-                                    echo "Failed to Remove message [$del].<br />\r\n".$conn->error;
+                                    echo "Failed to Remove message [$del_esc].<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                                 }
                             }
                         }else
@@ -1234,14 +1267,15 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             foreach($_POST['body'] as $key=>$body)
                             {
                                 $body = htmlentities($body, ENT_QUOTES);
-                                $id = $_POST['id'][$key];
+                                $id = (int)$_POST['id'][$key];
                                 $name = $_POST['name'][$key];
-                                $wrapper = $_POST['wrapper'][$key];
-                                $sql = "UPDATE `c_messages` SET `name` = '$name', `body` = '$body', `wrapper` = '$wrapper' WHERE `id` = '$id'";
-                                @$result->free();
-                                if($conn->query($sql))
+                                $wrapper = (int)$_POST['wrapper'][$key];
+                                $stmt = $conn->prepare("UPDATE `c_messages` SET `name` = ?, `body` = ?, `wrapper` = ? WHERE `id` = ?");
+                                $stmt->bind_param("ssii", $name, $body, $wrapper, $id);
+                                $name_esc = htmlspecialchars((string)$name, ENT_QUOTES);
+                                if($stmt->execute())
                                 {
-                                    echo "Updated message [$id] ($name).<br/>";
+                                    echo "Updated message [$id] ($name_esc).<br/>";
                                     ?>
                         <script>
                             setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=c_messages'",<?php echo $page_timeout;?>);
@@ -1249,7 +1283,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                     <?php
                                 }else
                                 {
-                                    echo "Failed to Update message [$id] ($name).<br />\r\n".$conn->error;
+                                    echo "Failed to Update message [$id] ($name_esc).<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                                 }
                             }
                         }
@@ -1299,27 +1333,28 @@ $db = "'.$db_name.'";            # Database with UNS tables
                     </tr>
                     <?php
                         $link = mysqli_connect($server, $username, $password, $db);
-                        $sql = "SELECT * FROM `c_messages` ORDER by `id` ASC";
-                        $result = mysqli_query($link, $sql);
+                        $result = mysqli_query($link, "SELECT * FROM `c_messages` ORDER by `id` ASC");
                         if(mysqli_num_rows($result))
                         {
                             $tablerowid=0;
-                            while($links = mysqli_fetch_array($result))
+                            while($links = mysqli_fetch_array($result, MYSQLI_ASSOC))
                             {
+                                $cm_id = (int)$links['id'];
+                                $cm_name = htmlspecialchars($links['name'], ENT_QUOTES);
                             ?>
                         <tr class="client_table_body">
                             <td onclick="expandcontract('mesgRow<?php echo $tablerowid;?>','mesgClickIcon<?php echo $tablerowid;?>')"
                                 id="mesgClickIcon<?php echo $tablerowid;?>" style="cursor: pointer; cursor: hand;">+
                             </td>
                             <td style="width:25%;">
-                                <input type="hidden" name="id[]" value="<?php echo $links['id'];?>"/>
-                                <input type="text" name="name[]" style="width:90%;" value="<?php echo $links['name'];?>"/>
+                                <input type="hidden" name="id[]" value="<?php echo $cm_id;?>"/>
+                                <input type="text" name="name[]" style="width:90%;" value="<?php echo $cm_name;?>"/>
                             </td>
                             <td>
-                                <a class="links" href="<?php echo  $reg_url;?>html/template.php?type=c_message&id=<?php echo $links['id'];?>" target="_blank"><?php echo $reg_url;?>html/template.php?type=c_message&id=<?php echo $links['id'];?></a>
+                                <a class="links" href="<?php echo  $reg_url;?>html/template.php?type=c_message&id=<?php echo $cm_id;?>" target="_blank"><?php echo $reg_url;?>html/template.php?type=c_message&id=<?php echo $cm_id;?></a>
                             </td>
                             <td style="width:1%;" align="center">
-                                <input type="checkbox" name="remove_[]" value="<?php echo $links['id'];?>"/>
+                                <input type="checkbox" name="remove_[]" value="<?php echo $cm_id;?>"/>
                             </td>
                         </tr>
                         <tbody id="mesgRow<?php echo $tablerowid;?>" style="display:none">
@@ -1418,17 +1453,12 @@ $db = "'.$db_name.'";            # Database with UNS tables
                 $client_get = @filter_input(INPUT_GET, 'client', FILTER_SANITIZE_SPECIAL_CHARS);
                 if(!$client_get)
                 {
-                    $sql = "SELECT `client_name` FROM `allowed_clients`";
-                    $result->free();
-                    $result = $conn->query($sql, 1);
+                    $result = $conn->query("SELECT `client_name` FROM `allowed_clients`", MYSQLI_STORE_RESULT);
                     $clients = array();
-                    $id = 0;
-                    $pre = "";
-                    while($links = $result->fetch_array(1))
+                    while($links = $result->fetch_array(MYSQLI_ASSOC))
                     {
                         $clients[] = $links['client_name'];
                     }
-                    #$clients = array_unique($clients);
                     ?>
                     <table border="1px" width="100%">
                         <tr>
@@ -1440,13 +1470,14 @@ $db = "'.$db_name.'";            # Database with UNS tables
                         <?php
                     foreach($clients as $client)
                     {
-                        $sql = "SELECT * FROM `friendly` WHERE `client` like '$client'";
-                        $result1 = $conn->query($sql,1);
-                        $friendly = $result1->fetch_array(1);
-                        $result1->free();
+                        $stmt1 = $conn->prepare("SELECT * FROM `friendly` WHERE `client` = ?");
+                        $stmt1->bind_param("s", $client);
+                        $stmt1->execute();
+                        $friendly = $stmt1->get_result()->fetch_array(MYSQLI_ASSOC);
+                        $client_esc = htmlspecialchars($client, ENT_QUOTES);
                         ?>
                             <tr class="client_table_body">
-                                <td><a href="?func=edit_urls&client=<?php echo $client;?>"><?php echo $friendly['friendly'];?></a></td>
+                                <td><a href="?func=edit_urls&client=<?php echo $client_esc;?>"><?php echo htmlspecialchars($friendly['friendly'] ?? '', ENT_QUOTES);?></a></td>
                             </tr>
                         <?php
                     }
@@ -1455,71 +1486,79 @@ $db = "'.$db_name.'";            # Database with UNS tables
                     <?php
                 }else
                 {
+                    # $client_get becomes part of a dynamically-named "<client>_links" table
+                    # below, which can't be parameterized in a prepared statement - reject
+                    # anything that isn't a plain identifier before it's used that way.
+                    if(!is_safe_client_id($client_get)){die("Invalid client.");}
                     $cl_func = filter_input(INPUT_GET, 'cl_func', FILTER_SANITIZE_SPECIAL_CHARS);
                     switch($cl_func)
                     {
                         case "copy2_proc":
                             foreach($_POST['copy_clients'] as $copy_client)
                             {
+                                if(!is_safe_client_id($copy_client)){continue;}
                                 $fail = 0;
-                                $result->free();
-                                $sql = "SELECT * FROM `".$copy_client."_links`";
-                                $result = $conn->query($sql, 1);
+                                $result = $conn->query("SELECT * FROM `".$copy_client."_links`", MYSQLI_STORE_RESULT);
                                 $links = array(); #get list of URLS from Client that you want to copy to
 
-                                while($client_links = $result->fetch_array(1))
+                                while($client_links = $result->fetch_array(MYSQLI_ASSOC))
                                 {
                                     $links[] = $client_links['url']."~".$client_links['refresh'];
                                 }
-                                @$result->free();
                                 #lets get its friendly name
-                                $sql = "SELECT friendly FROM `friendly` where `client` like '$copy_client'";
-                                $result = $conn->query($sql, 1);
-                                $friendly = $result->fetch_array(1);
-                                $friend = $friendly['friendly'];
-                                if(!@is_null($links[0]))
+                                $stmt = $conn->prepare("SELECT friendly FROM `friendly` where `client` = ?");
+                                $stmt->bind_param("s", $copy_client);
+                                $stmt->execute();
+                                $friendly = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                $friend = $friendly['friendly'] ?? $copy_client;
+                                $friend_esc = htmlspecialchars($friend, ENT_QUOTES);
+                                if(!empty($links[0]))
                                 {
                                     $name = "Backup of URLS for $friend on ".date("F j, Y \a\t g:i a");
                                     $imp_links = implode("||", $links);
-                                    $result->free();
-                                    $sql = "INSERT INTO `archive_links` (`id`, `client`, `urls`, `name`, `details`, `date`) VALUES ('', '$copy_client', '$imp_links', '$name', 'Automated backup.', '".time()."')";
-                                    if($result = $conn->query($sql))
+                                    $now = time();
+                                    $stmt = $conn->prepare("INSERT INTO `archive_links` (`client`, `urls`, `name`, `details`, `date`) VALUES (?, ?, ?, 'Automated backup.', ?)");
+                                    $stmt->bind_param("ssss", $copy_client, $imp_links, $name, $now);
+                                    if($stmt->execute())
                                     {
-                                        echo "URLs for Client: $friend have been backed up.<br /><br />\r\n";
+                                        echo "URLs for Client: $friend_esc have been backed up.<br /><br />\r\n";
                                     }else
                                     {
-                                        echo "URLs for Client: $friend have <u><b>NOT</b></u> been backed up.<br /><br />\r\n";
+                                        echo "URLs for Client: $friend_esc have <u><b>NOT</b></u> been backed up.<br /><br />\r\n";
                                         $fail = 1;
                                     }
                                 }else
                                 {
-                                    echo "Client: $friend Does not have any URLs yet.<br /><br />";
+                                    echo "Client: $friend_esc Does not have any URLs yet.<br /><br />";
                                 }
                                 if(!$fail)
                                 {
                                     $ids = explode("|", $_POST['urls']);
-                                    if(is_object($result)){@$result->free();}
-                                    $sql = "TRUNCATE TABLE `".$copy_client."_links`";
-                                    if(!$conn->query($sql)){echo "Error Truncating table<br />".$conn->error;}
+                                    if(!$conn->query("TRUNCATE TABLE `".$copy_client."_links`")){echo "Error Truncating table<br />".htmlspecialchars($conn->error, ENT_QUOTES);}
                                     foreach($ids as $id)
                                     {
-                                        echo "Start Copy of ID: $id for Client: $friend<br />";
-                                        $sql = "SELECT * FROM `".$client_get."_links` where `id` like '$id'";
-                                        if(is_object($result)){@$result->free();}
-                                        $result = $conn->query($sql, 1);
-                                        $copy_link = $result->fetch_array(1);
-                                        $sql = "INSERT INTO `".$copy_client."_links` (`id`, `url`, `disabled`, `refresh`) VALUES ( '', '".$copy_link['url']."', '0', '".$copy_link['refresh']."')";                                    @$result->free();
-                                        if(!$conn->query($sql))
+                                        $id_esc = htmlspecialchars($id, ENT_QUOTES);
+                                        echo "Start Copy of ID: $id_esc for Client: $friend_esc<br />";
+                                        $stmt = $conn->prepare("SELECT * FROM `".$client_get."_links` where `id` = ?");
+                                        $stmt->bind_param("i", $id);
+                                        $stmt->execute();
+                                        $copy_link = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                        if($copy_link)
                                         {
-                                            echo "Failed to copy URL [$id] to client: $friend.<br /><br />";
+                                            $ins_stmt = $conn->prepare("INSERT INTO `".$copy_client."_links` (`url`, `disabled`, `refresh`) VALUES (?, 0, ?)");
+                                            $ins_stmt->bind_param("si", $copy_link['url'], $copy_link['refresh']);
+                                        }
+                                        if(!$copy_link || !$ins_stmt->execute())
+                                        {
+                                            echo "Failed to copy URL [$id_esc] to client: $friend_esc.<br /><br />";
                                         }else
                                         {
-                                            echo "Copied URL [$id] to Client: $friend.<br /><br />";
+                                            echo "Copied URL [$id_esc] to Client: $friend_esc.<br /><br />";
                                         }
                                     }
                                 }else
                                 {
-                                    echo "URLs for Client: $friend have <u><b>NOT</b></u> been copied.<br /><br />\r\n";
+                                    echo "URLs for Client: $friend_esc have <u><b>NOT</b></u> been copied.<br /><br />\r\n";
                                 }
                                 ?>
                    <script>
@@ -1542,14 +1581,15 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <td>
                                 <select name="copy_clients[]" style="width:100%;" size="10" multiple="multiple">
                             <?php
-                            $result->free();
-                            $sql = "SELECT * FROM `friendly` where `client` NOT LIKE '$client_get'";
-                            $result = $conn->query($sql, 1);
-                            while($all_clients = $result->fetch_array(1))
+                            $stmt = $conn->prepare("SELECT * FROM `friendly` where `client` != ?");
+                            $stmt->bind_param("s", $client_get);
+                            $stmt->execute();
+                            $result = $stmt->get_result();
+                            while($all_clients = $result->fetch_array(MYSQLI_ASSOC))
                             {
-                                ?><option value="<?php echo $all_clients['client'];?>"><?php echo $all_clients['friendly'];?></option><?php
+                                ?><option value="<?php echo htmlspecialchars($all_clients['client'], ENT_QUOTES);?>"><?php echo htmlspecialchars($all_clients['friendly'], ENT_QUOTES);?></option><?php
                             }
-                            $urls_imp = implode("|", $_POST['urls']);
+                            $urls_imp = htmlspecialchars(implode("|", $_POST['urls']), ENT_QUOTES);
                             ?>
                                 </select>
                                 <input type="hidden" name="urls" value="<?php echo $urls_imp; ?>">
@@ -1607,14 +1647,12 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <td>
                                 <select name="saved" style="width:100%;" size="10">
                             <?php
-                            $result->free();
-                            $sql = "SELECT * FROM `saved_lists`";
-                            $result = $conn->query($sql, 1);
-                            while($all_clients = $result->fetch_array(1))
+                            $result = $conn->query("SELECT * FROM `saved_lists`", MYSQLI_STORE_RESULT);
+                            while($all_clients = $result->fetch_array(MYSQLI_ASSOC))
                             {
-                                ?><option value="<?php echo $all_clients['id'];?>"><?php echo $all_clients['name'];?></option><?php
+                                ?><option value="<?php echo (int)$all_clients['id'];?>"><?php echo htmlspecialchars($all_clients['name'], ENT_QUOTES);?></option><?php
                             }
-                            $urls_imp = implode("|", $_POST['urls']);
+                            $urls_imp = htmlspecialchars(implode("|", $_POST['urls']), ENT_QUOTES);
                             ?>
                                 </select>
                                 <input type="hidden" name="urls" value="<?php echo $urls_imp; ?>">
@@ -1632,51 +1670,32 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                 if(@$_POST['remove'])
                                 {
                                     $urls = array();
-                                    if(is_array($_POST['urls']))
+                                    $freindly = htmlspecialchars(gen_friendly($client_get), ENT_QUOTES);
+                                    $remove_urls = is_array($_POST['urls']) ? $_POST['urls'] : array($_POST['urls']);
+                                    foreach($remove_urls as $url)
                                     {
-                                        $result->free();
-                                        $freindly = gen_friendly($client_get);
-                                        foreach($_POST['urls'] as $url)
+                                        $url_esc = htmlspecialchars((string)$url, ENT_QUOTES);
+                                        $stmt = $conn->prepare("SELECT * FROM `".$client_get."_links` WHERE `id` = ?");
+                                        $stmt->bind_param("i", $url);
+                                        $stmt->execute();
+                                        $link = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                        if(!$link)
                                         {
-                                            $sql = "SELECT * FROM `".$client_get."_links` WHERE `id` = '$url'";
-                                            $result = $conn->query($sql, 1);
-                                            if($conn->error != "")
-                                            {
-                                                echo "URL Does not Exsist any more.<br />";
-                                                continue;
-                                            }
-                                            $link = $result->fetch_array(1);
-                                            $result->free();
-                                            $sql = "DELETE FROM `".$client_get."_links` WHERE `id` = '$url'";
-                                            if($conn->query($sql))
-                                            {
-                                                echo "Removed Link [$url] from ($freindly)'s list.<br />";
-                                                $urls[] = $link['url']."~".$link['refresh'];
-                                            }else
-                                            {
-                                                echo "Failed to Remove Link [$url] from ($freindly)'s list.<br />\r\n".$conn->error;
-                                            }
+                                            echo "URL Does not Exsist any more.<br />";
+                                            continue;
                                         }
-                                    }else
-                                    {
-                                        $result->free();
-                                        $url = addslashes($_POST['urls']);
-                                        $sql = "SELECT * FROM `".$client_get."_links` WHERE `id` = '$url'";
-                                        $result = $conn->query($sql, 1);
-                                        $link = $result->fetch_array(1);
-
-                                        $result->free();
-                                        $sql = "DELETE FROM `".$client_get."_links` WHERE `id` = '$url'";
-                                        if($conn->query($sql))
+                                        $del_stmt = $conn->prepare("DELETE FROM `".$client_get."_links` WHERE `id` = ?");
+                                        $del_stmt->bind_param("i", $url);
+                                        if($del_stmt->execute())
                                         {
-                                            echo "Removed Link [$url] from ($freindly)'s list.<br />";
+                                            echo "Removed Link [$url_esc] from ($freindly)'s list.<br />";
                                             $urls[] = $link['url']."~".$link['refresh'];
                                         }else
                                         {
-                                            echo "Failed to Remove Link [$url] from ($freindly)'s list.<br />\r\n".$conn->error;
+                                            echo "Failed to Remove Link [$url_esc] from ($freindly)'s list.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                                         }
                                     }
-                                    if(is_null($urls))
+                                    if(empty($urls))
                                     {
                                         echo "No URLS were deleted, none to back up.<br />";
                                         ?>
@@ -1690,8 +1709,9 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                         $time = time();
                                         $name = "Automated Backup on ".date("F j, Y, g:i a");
                                         $details = "Automated Backup of removed URLs $client_get";
-                                        $sql = "INSERT INTO `archive_links` (`id`, `client`, `urls`, `name`, `details`, `date`) VALUES ('', '$client_get', '$url_imp', '$name', '$details', '$time')";
-                                        if($conn->query($sql))
+                                        $stmt = $conn->prepare("INSERT INTO `archive_links` (`client`, `urls`, `name`, `details`, `date`) VALUES (?, ?, ?, ?, ?)");
+                                        $stmt->bind_param("sssss", $client_get, $url_imp, $name, $details, $time);
+                                        if($stmt->execute())
                                         {
                                             echo "Backed up Links for ($client_get).";
                                     ?>
@@ -1711,15 +1731,16 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                     $refresh = $_POST['refresh_time'];
                                     foreach($URLid as $key=>$id)
                                     {
-                                        @$result->free();
-                                        $sql = "UPDATE `".$client_get."_links` set `refresh` = '".$refresh[$key]."' WHERE `id` = '$id'";
-                                        echo $sql."<br />";
-                                        if($conn->query($sql, 1))
+                                        $id_esc = htmlspecialchars((string)$id, ENT_QUOTES);
+                                        $r_val = (int)$refresh[$key];
+                                        $stmt = $conn->prepare("UPDATE `".$client_get."_links` set `refresh` = ? WHERE `id` = ?");
+                                        $stmt->bind_param("ii", $r_val, $id);
+                                        if($stmt->execute())
                                         {
-                                            echo "Updated URL [$id] Refresh Time on Client ($client_get).<br />\r\n";
+                                            echo "Updated URL [$id_esc] Refresh Time on Client ($client_get).<br />\r\n";
                                         }else
                                         {
-                                            echo "Failed to update URL [$id] status on Client ($client_get).<br />\r\n".$conn->error;
+                                            echo "Failed to update URL [$id_esc] status on Client ($client_get).<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                                         }
                                     }
                                     ?>
@@ -1730,31 +1751,31 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                 }
                             break;
                         case "add_url_batch":
-                            $client_get = filter_input(INPUT_GET, 'client', FILTER_SANITIZE_SPECIAL_CHARS);
                             $urls = filter_input(INPUT_POST, 'URLS', FILTER_SANITIZE_SPECIAL_CHARS);
-                            $refresh = filter_input(INPUT_POST, 'refresh', FILTER_SANITIZE_SPECIAL_CHARS);
+                            $refresh = (int)filter_input(INPUT_POST, 'refresh', FILTER_SANITIZE_SPECIAL_CHARS);
                             $url_exp = explode("&#13;&#10;", $urls);
                             $i=0;
-                            $result->free();
                             foreach($url_exp as $url_)
                             {
                                 $url_ = trim($url_);
-                                $sql = "INSERT INTO `".$client_get."_links` (`id`, `url`, `disabled`, `refresh`) VALUES ('', '$url_', '0', '$refresh')";
-                                if($conn->query($sql))
+                                $stmt = $conn->prepare("INSERT INTO `".$client_get."_links` (`url`, `disabled`, `refresh`) VALUES (?, 0, ?)");
+                                $stmt->bind_param("si", $url_, $refresh);
+                                if($stmt->execute())
                                 {
-                                    echo "Added: $url_<br />\r\n";
+                                    echo "Added: ".htmlspecialchars($url_, ENT_QUOTES)."<br />\r\n";
                                     $i++;
                                 }else
                                 {
-                                    echo "Failed to add URL....<br />".$conn->error;
+                                    echo "Failed to add URL....<br />".htmlspecialchars($conn->error, ENT_QUOTES);
                                 }
                             }
-                            $sql = "SELECT friendly FROM `friendly` WHERE `client` like '$client_get'";
-                            $result = $conn->query($sql, 1);
-                            $friendly = $result->fetch_array(1);
+                            $stmt = $conn->prepare("SELECT friendly FROM `friendly` WHERE `client` = ?");
+                            $stmt->bind_param("s", $client_get);
+                            $stmt->execute();
+                            $friendly = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
                             if($i > 0)
                             {
-                                echo "Added ($i) New URL for Client. (".$friendly['friendly'].")<br />";
+                                echo "Added ($i) New URL for Client. (".htmlspecialchars($friendly['friendly'] ?? '', ENT_QUOTES).")<br />";
                                 ?>
                     <script>
                         setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
@@ -1770,22 +1791,22 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             $url_imp = filter_input(INPUT_POST, 'urls', FILTER_SANITIZE_SPECIAL_CHARS);
                             $details = filter_input(INPUT_POST, 'details', FILTER_SANITIZE_SPECIAL_CHARS);
                             $url_exp = explode("|", $url_imp);
-                            $result->free();
                             $links = array();
                             foreach($url_exp as $id)
                             {
-                                $sql = "SELECT * FROM `".$client_get."_links` WHERE `id` like '$id'";
-                                $result = $conn->query($sql, 1);
-                                $link = $result->fetch_array(1);
-                                $links[] = $link['url'].'~'.$link['refresh'];
-                                $result->free();
+                                $stmt = $conn->prepare("SELECT * FROM `".$client_get."_links` WHERE `id` = ?");
+                                $stmt->bind_param("i", $id);
+                                $stmt->execute();
+                                $link = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                if($link){$links[] = $link['url'].'~'.$link['refresh'];}
                             }
                             $urls_imp = implode("|", $links);
                             $time = time();
-                            $sql = "INSERT INTO `saved_lists` (`id`, `urls`, `name`, `details`, `date`) VALUES ('', '$urls_imp', '$name', '$details', '$time')";
-                            if($conn->query($sql))
+                            $stmt = $conn->prepare("INSERT INTO `saved_lists` (`urls`, `name`, `details`, `date`) VALUES (?, ?, ?, ?)");
+                            $stmt->bind_param("ssss", $urls_imp, $name, $details, $time);
+                            if($stmt->execute())
                             {
-                                echo "Saved List. ($name)";
+                                echo "Saved List. (".htmlspecialchars((string)$name, ENT_QUOTES).")";
                                 ?>
                     <script>
                         setTimeout("location.href = '<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
@@ -1793,24 +1814,25 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                 <?php
                             }else
                             {
-                                echo "Failed to save list....<br />".$conn->error;
+                                echo "Failed to save list....<br />".htmlspecialchars($conn->error, ENT_QUOTES);
                             }
                             break;
                         case "save_append":
                             $urls_imp = filter_input(INPUT_POST, 'urls', FILTER_SANITIZE_SPECIAL_CHARS);
-                            $saved = filter_input(INPUT_POST, 'saved', FILTER_SANITIZE_SPECIAL_CHARS);
+                            $saved = (int)filter_input(INPUT_POST, 'saved', FILTER_SANITIZE_SPECIAL_CHARS);
 
-                            $sql = "SELECT * FROM `saved_lists` WHERE `id` like '$saved'";
-                            $result = $conn->query($sql,1);
-                            $saved_array = $result->fetch_array(1);
+                            $stmt = $conn->prepare("SELECT * FROM `saved_lists` WHERE `id` = ?");
+                            $stmt->bind_param("i", $saved);
+                            $stmt->execute();
+                            $saved_array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
 
-                            $urls_imp = $saved_array['urls']."|".$urls_imp;
-
-                            $result->free();
-                            $sql = "UPDATE `saved_lists` SET `urls`='$urls_imp', `date`='$time' WHERE `id` = '$saved'";
-                            if($conn->query($sql))
+                            $urls_imp = ($saved_array['urls'] ?? '')."|".$urls_imp;
+                            $time = time();
+                            $stmt = $conn->prepare("UPDATE `saved_lists` SET `urls`= ?, `date`= ? WHERE `id` = ?");
+                            $stmt->bind_param("sii", $urls_imp, $time, $saved);
+                            if($stmt->execute())
                             {
-                                echo "Updated List. ($name)";
+                                echo "Updated List.";
                                 ?>
                     <script>
                         setTimeout("location.href = ' $proto.<?php echo  $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
@@ -1818,43 +1840,43 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                 <?php
                             }else
                             {
-                                echo "Failed to update list.<br />".$conn->error;
+                                echo "Failed to update list.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
                             }
                             break;
                         case "restore":
                             check_archives($client_get);
                             $urls_imp = filter_input(INPUT_POST, 'urls', FILTER_SANITIZE_SPECIAL_CHARS);
                             $url_exp = explode("|", $urls_imp);
-                            $result->free();
-                            $friendly = gen_friendly($client_get);
-                            $sql = "SELECT * FROM `".$client_get."_links`";
-                            $result = $conn->query($sql, 1);
-                            while($link = $result->fetch_array(1))
+                            $urls = array();
+                            $friendly = htmlspecialchars(gen_friendly($client_get), ENT_QUOTES);
+                            $result = $conn->query("SELECT * FROM `".$client_get."_links`", MYSQLI_STORE_RESULT);
+                            while($link = $result->fetch_array(MYSQLI_ASSOC))
                             {
-                                $sql = "DELETE FROM `".$client_get."_links` WHERE `id` = '".$link['id']."'";
-                                $mlink = mysqli_connect($server, $username, $password, $db);
-                                if(mysqli_query($mlink, $sql))
+                                $del_stmt = $conn->prepare("DELETE FROM `".$client_get."_links` WHERE `id` = ?");
+                                $del_stmt->bind_param("i", $link['id']);
+                                if($del_stmt->execute())
                                 {
-                                    echo "Removed Link [".$link['id']."] from ($friendly)'s list.<br />";
+                                    echo "Removed Link [".(int)$link['id']."] from ($friendly)'s list.<br />";
                                     $urls[] = $link['url']."~".$link['refresh'];
                                 }else
                                 {
-                                    echo "Failed to Remove Link [".$link['id']."] from ($friendly)'s list.<br />\r\n".mysqli_error($link);
+                                    echo "Failed to Remove Link [".(int)$link['id']."] from ($friendly)'s list.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                                 }
                             }
-                            if(!@is_null($urls))
+                            if(!empty($urls))
                             {
                                 $url_imp = implode("|", $urls);
                                 $time = time();
                                 $name = "Automated Backup on ".date("F j, Y, g:i a");
                                 $details = "Automated Backup of removed URLs $friendly";
-                                $sql = "INSERT INTO `archive_links` (`id`, `client`, `urls`, `name`, `details`, `date`) VALUES ('', '$client_get', '$url_imp', '$name', '$details', '$time')";
-                                if($conn->query($sql))
+                                $stmt = $conn->prepare("INSERT INTO `archive_links` (`client`, `urls`, `name`, `details`, `date`) VALUES (?, ?, ?, ?, ?)");
+                                $stmt->bind_param("sssss", $client_get, $url_imp, $name, $details, $time);
+                                if($stmt->execute())
                                 {
                                     echo "Backed up Links for ($friendly).";
                                 }else
                                 {
-                                    echo "Failed to Back up Links for ($friendly).<br />\r\n".$conn->error;
+                                    echo "Failed to Back up Links for ($friendly).<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                                     $fail = 1;
                                 }
                             }else
@@ -1869,9 +1891,10 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                     {
                                         $data_exp = explode("~", $data);
                                         $url = $data_exp[0];
-                                        $refresh = $data_exp[1];
-                                        $sql = "INSERT INTO `".$client_get."_links` (`id`, `url`,`disabled`, `refresh`) VALUES ('', '$url', '0', '$refresh')";
-                                        if($conn->query($sql))
+                                        $refresh = (int)($data_exp[1] ?? 0);
+                                        $stmt = $conn->prepare("INSERT INTO `".$client_get."_links` (`url`,`disabled`, `refresh`) VALUES (?, 0, ?)");
+                                        $stmt->bind_param("si", $url, $refresh);
+                                        if($stmt->execute())
                                         {
                                             echo "Added URL<br />\r\n";
                                         }else
@@ -1886,15 +1909,15 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                     <?php
                                 }else
                                 {
-                                    echo "Failed to truncate.<br />".$conn->error;
+                                    echo "Failed to truncate.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
                                 }
                             }
                             break;
                         case "remove":
-                            $id = filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
-                            $sql = "DELETE FROM `saved_lists` WHERE `id` = '$id'";
-                            $result->free();
-                            if($conn->query($sql))
+                            $id = (int)filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
+                            $stmt = $conn->prepare("DELETE FROM `saved_lists` WHERE `id` = ?");
+                            $stmt->bind_param("i", $id);
+                            if($stmt->execute())
                             {
                                 echo "Removed Saved List";
                                ?>
@@ -1904,7 +1927,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <?php
                             }else
                             {
-                                echo "Failed to Removed Saved List.<br />\r\n".$conn->error;
+                                echo "Failed to Removed Saved List.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                             }
                             break;
                         default:
@@ -1939,9 +1962,8 @@ $db = "'.$db_name.'";            # Database with UNS tables
                 }
                 </script>
                     <?php
-                    $result->free();
-                    $result = $conn->query("SELECT `emerg` FROM `settings` LIMIT 1", 1);
-                    $settings = $result->fetch_array(1);
+                    $result = $conn->query("SELECT `emerg` FROM `settings` LIMIT 1", MYSQLI_STORE_RESULT);
+                    $settings = $result->fetch_array(MYSQLI_ASSOC);
                     ?>
                 <table border="1px" width="100%">
                     <tr class="client_table_head">
@@ -1966,60 +1988,62 @@ $db = "'.$db_name.'";            # Database with UNS tables
                     </tr>
                     <?php
                     $link = mysqli_connect($server, $username, $password, $db);
-                    $sql = "SELECT * FROM `emerg`";
-                    $result1 = mysqli_query($link,$sql);
+                    $result1 = mysqli_query($link, "SELECT * FROM `emerg`");
                     if(mysqli_num_rows($result1) > 0)
                     {
                         ?><form name="client_edit" action="?func=update_emerg" method="POST"><?php
-                        while($emerg_links = mysqli_fetch_array($result1))
+                        while($emerg_links = mysqli_fetch_array($result1, MYSQLI_ASSOC))
                         {
+                            $emerg_url_esc = htmlspecialchars($emerg_links['url'], ENT_QUOTES);
                             ?>
                     <tr class="client_table_body">
                         <td align="center">
                             <?php if($emerg_links['enabled']){echo "&#x2713;";}else{echo "&#x2717;";}?>
                         </td>
                         <td>
-                            <?php 
-                            echo '<a class="links" href="'.$emerg_links['url'].'" target="_blank">'.$emerg_links['url'].'</a>';
+                            <?php
+                            echo '<a class="links" href="'.$emerg_url_esc.'" target="_blank">'.$emerg_url_esc.'</a>';
                             $parse_url = parse_url($emerg_links['url']);
-                            if(str_replace("/","",$host) == $parse_url['host'])
+                            if(str_replace("/","",$host) == ($parse_url['host'] ?? null))
                             {
                                 $exp_url = explode("?", html_entity_decode($emerg_links['url']));
-                                $query_url = html_entity_decode($exp_url[1]);
+                                $query_url = html_entity_decode($exp_url[1] ?? '');
 
                                 $query_ = array();
                                 $exp = explode('&',$query_url);
                                 foreach($exp as $e)
                                 {
                                     $qur = explode("=", $e);
-                                    $query_[$qur[0]] = $qur[1];
+                                    $query_[$qur[0]] = $qur[1] ?? '';
                                 }
-                                $id = $query_['id'];
-                                switch($query_['type'])
+                                $id = (int)($query_['id'] ?? 0);
+                                switch($query_['type'] ?? '')
                                 {
                                     case "rss":
-                                        $sql = "SELECT * FROM `rss_feeds` WHERE `id` = '$id'";
-                                        $result2 = mysqli_query($link,$sql);
-                                        $rss = mysqli_fetch_array($result2);
-                                        echo " (".$rss['name'].")";
+                                        $stmt2 = mysqli_prepare($link, "SELECT * FROM `rss_feeds` WHERE `id` = ?");
+                                        mysqli_stmt_bind_param($stmt2, "i", $id);
+                                        mysqli_stmt_execute($stmt2);
+                                        $rss = mysqli_fetch_array(mysqli_stmt_get_result($stmt2), MYSQLI_ASSOC);
+                                        if($rss){echo " (".htmlspecialchars($rss['name'], ENT_QUOTES).")";}
                                         break;
                                     case "c_message":
-                                        $sql = "SELECT * FROM `c_messages` WHERE `id` = '$id'";
-                                        $result2 = mysqli_query($link,$sql);
-                                        $c_mesg = mysqli_fetch_array($result2);
-                                        echo " (".$c_mesg['name'].")";
+                                        $stmt2 = mysqli_prepare($link, "SELECT * FROM `c_messages` WHERE `id` = ?");
+                                        mysqli_stmt_bind_param($stmt2, "i", $id);
+                                        mysqli_stmt_execute($stmt2);
+                                        $c_mesg = mysqli_fetch_array(mysqli_stmt_get_result($stmt2), MYSQLI_ASSOC);
+                                        if($c_mesg){echo " (".htmlspecialchars($c_mesg['name'], ENT_QUOTES).")";}
                                         break;
                                 }
                             }
                             ?>
                         </td>
                         <td align="center">
-                                <input type="hidden" name="url_id[]" value="<?php echo $emerg_links['id'];?>">
-                                <input type="text" name="refresh_t[]" style="width: 49px" value="<?php echo $emerg_links['refresh'];?>">
+                                <input type="hidden" name="url_id[]" value="<?php echo (int)$emerg_links['id'];?>">
+                                <input type="text" name="refresh_t[]" style="width: 49px" value="<?php echo (int)$emerg_links['refresh'];?>">
                         </td>
                         <td align="center">
                                 <input type="hidden" name="url_t[]" value="<?php if($emerg_links['enabled']){echo "0";}else{echo "1";}?>">
-                                <input type="checkbox" name="urls[]" value="<?php echo $emerg_links['id'];?>">
+                                <input type="checkbox" name="urls[]" value="<?php echo (int)$emerg_links['id'];?>">
                         </td>
                     </tr>
                         <?php
@@ -2096,10 +2120,10 @@ $db = "'.$db_name.'";            # Database with UNS tables
         case "emerg_set":
             if($perms['edit_emerg'])
             {
-                $toggle = filter_input(INPUT_POST, 'toggle', FILTER_SANITIZE_SPECIAL_CHARS);
-                $result->free();
-                $sql = "UPDATE `settings` set `emerg` = '$toggle' WHERE `id` = '1'";
-                if($conn->query($sql, 1))
+                $toggle = (int)filter_input(INPUT_POST, 'toggle', FILTER_SANITIZE_SPECIAL_CHARS);
+                $stmt = $conn->prepare("UPDATE `settings` set `emerg` = ? WHERE `id` = 1");
+                $stmt->bind_param("i", $toggle);
+                if($stmt->execute())
                 {
                     if($led_blink){emerg_blink($toggle);}
                     if($toggle){echo "Enabled";}else{echo "Disabled";}
@@ -2113,7 +2137,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                 {
                     echo "Failed to ";
                     if($toggle){echo "Enabled";}else{echo "Disabled";}
-                    echo "Global Emergency Messages<br />\r\n".$conn->error;
+                    echo "Global Emergency Messages<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                 }
             }else
             {
@@ -2134,14 +2158,13 @@ $db = "'.$db_name.'";            # Database with UNS tables
                         <?php
                         break;
                     }
-                    $url_id = filter_input(INPUT_POST, 'url_t', FILTER_SANITIZE_SPECIAL_CHARS);
-                    $refresh = filter_input(INPUT_POST, 'refresh', FILTER_SANITIZE_SPECIAL_CHARS);
-                    $result->free();
                     foreach($_POST['urls'] as $key=>$id)
                     {
-                        $url_t = $_POST['url_t'][$key];
-                        $sql = "UPDATE `emerg` set `enabled` = '$url_t' WHERE `id` = '$id'";
-                        if($conn->query($sql, 1))
+                        $id = (int)$id;
+                        $url_t = (int)$_POST['url_t'][$key];
+                        $stmt = $conn->prepare("UPDATE `emerg` set `enabled` = ? WHERE `id` = ?");
+                        $stmt->bind_param("ii", $url_t, $id);
+                        if($stmt->execute())
                         {
                             echo "Updated URL [$id].<br />";
                             ?>
@@ -2151,7 +2174,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <?php
                         }else
                         {
-                            echo "Failed to updated URL [$id].<br />\r\n".$conn->error;
+                            echo "Failed to updated URL [$id].<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                         }
                     }
                 }elseif(@$_POST['delete'] === 'Delete')
@@ -2165,11 +2188,12 @@ $db = "'.$db_name.'";            # Database with UNS tables
                         <?php
                         break;
                     }
-                    $result->free();
                     foreach($_POST['urls'] as $key=>$id)
                     {
-                        $sql = "DELETE FROM `emerg` WHERE `id` = '$id'";
-                        if($conn->query($sql, 1))
+                        $id = (int)$id;
+                        $stmt = $conn->prepare("DELETE FROM `emerg` WHERE `id` = ?");
+                        $stmt->bind_param("i", $id);
+                        if($stmt->execute())
                         {
                             echo "Removed [$id].<br />";
                             ?>
@@ -2179,18 +2203,18 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <?php
                         }else
                         {
-                            echo "Failed to Remove [$id].<br />\r\n".$conn->error;
+                            echo "Failed to Remove [$id].<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                         }
                     }
                 }elseif(@$_POST['refresh'] === 'Update')
                 {
-                    $result->free();
                     foreach($_POST['url_id'] as $key=>$id)
                     {
-                        $refresh = $_POST['refresh_t'][$key];
-                        $sql = "UPDATE `emerg` set `refresh` = '$refresh' WHERE `id` = '$id'";
-                        echo $sql."<br/>";
-                        if($conn->query($sql, 1))
+                        $id = (int)$id;
+                        $refresh = (int)$_POST['refresh_t'][$key];
+                        $stmt = $conn->prepare("UPDATE `emerg` set `refresh` = ? WHERE `id` = ?");
+                        $stmt->bind_param("ii", $refresh, $id);
+                        if($stmt->execute())
                         {
                             echo "Updated URL [$id] Refresh Time.";
                             ?>
@@ -2200,7 +2224,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <?php
                         }else
                         {
-                            echo "Failed to updated URL [$id] status<br />\r\n".$conn->error;
+                            echo "Failed to updated URL [$id] status<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                         }
                     }
                 }
@@ -2213,21 +2237,21 @@ $db = "'.$db_name.'";            # Database with UNS tables
             if($perms['edit_emerg'])
             {
                 $urls = filter_input(INPUT_POST, 'URLS', FILTER_SANITIZE_SPECIAL_CHARS);
-                $refresh = filter_input(INPUT_POST, 'refresh', FILTER_SANITIZE_SPECIAL_CHARS);
+                $refresh = (int)filter_input(INPUT_POST, 'refresh', FILTER_SANITIZE_SPECIAL_CHARS);
                 $url_exp = explode("&#13;&#10;", $urls);
                 $i=0;
-                $result->free();
                 foreach($url_exp as $url_)
                 {
                     $url_ = trim($url_);
-                    $sql = "INSERT INTO `emerg` (`id`, `url`, `enabled`, `refresh`) VALUES ('', '$url_', '1', '$refresh')";
-                    if($conn->query($sql))
+                    $stmt = $conn->prepare("INSERT INTO `emerg` (`url`, `enabled`, `refresh`) VALUES (?, 1, ?)");
+                    $stmt->bind_param("si", $url_, $refresh);
+                    if($stmt->execute())
                     {
-                        echo "Added: $url_<br />\r\n";
+                        echo "Added: ".htmlspecialchars($url_, ENT_QUOTES)."<br />\r\n";
                         $i++;
                     }else
                     {
-                        echo "Failed to add URL....<br />".$conn->error;
+                        echo "Failed to add URL....<br />".htmlspecialchars($conn->error, ENT_QUOTES);
                     }
                 }
                 if($i > 0)
@@ -2252,12 +2276,12 @@ $db = "'.$db_name.'";            # Database with UNS tables
             {
                 $client_get = filter_input(INPUT_GET, 'client', FILTER_SANITIZE_SPECIAL_CHARS);
                 $client_name = filter_input(INPUT_POST, 'client_name', FILTER_SANITIZE_SPECIAL_CHARS);
-                $client_id = filter_input(INPUT_POST, 'client_id', FILTER_SANITIZE_SPECIAL_CHARS);
-                $result->free();
-                $sql = "UPDATE `friendly` SET `friendly` = '$client_name' WHERE `id` = '$client_id'";
-                if($conn->query($sql, 1))
+                $client_id = (int)filter_input(INPUT_POST, 'client_id', FILTER_SANITIZE_SPECIAL_CHARS);
+                $stmt = $conn->prepare("UPDATE `friendly` SET `friendly` = ? WHERE `id` = ?");
+                $stmt->bind_param("si", $client_name, $client_id);
+                if($stmt->execute())
                 {
-                    echo "Renamed Client [$client_id] $client_name.";
+                    echo "Renamed Client [$client_id] ".htmlspecialchars((string)$client_name, ENT_QUOTES).".";
                     ?>
                     <script>
                         setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_client&client=<?php echo $client_get;?>'",<?php echo $page_timeout;?>);
@@ -2265,7 +2289,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                     <?php
                 }else
                 {
-                    echo "Failed to Rename Client [$client_id]<br />\r\n".$conn->error;
+                    echo "Failed to Rename Client [$client_id]<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                 }
             }else
             {
@@ -2274,11 +2298,10 @@ $db = "'.$db_name.'";            # Database with UNS tables
             break;
         case "client_led_set":
             $cl_id = filter_input(INPUT_POST, 'cl_id', FILTER_SANITIZE_SPECIAL_CHARS);
-            $led_id = filter_input(INPUT_POST, 'cl_led_id', FILTER_SANITIZE_SPECIAL_CHARS);
-            $result->free();
-            $sql = "UPDATE `allowed_clients` SET `led` = '$led_id' WHERE `client_name` = '$cl_id'";
-            $result = $conn->query($sql);
-            if($result)
+            $led_id = (int)filter_input(INPUT_POST, 'cl_led_id', FILTER_SANITIZE_SPECIAL_CHARS);
+            $stmt = $conn->prepare("UPDATE `allowed_clients` SET `led` = ? WHERE `client_name` = ?");
+            $stmt->bind_param("is", $led_id, $cl_id);
+            if($stmt->execute())
             {
                 echo "Updated LED Group to #$led_id<br/>";
                 ?>
@@ -2295,6 +2318,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
             if($perms['edit_urls'])
             {
                 $client_get = filter_input(INPUT_GET, 'client', FILTER_SANITIZE_SPECIAL_CHARS);
+                if(!is_safe_client_id($client_get)){die("Invalid client.");}
                 ?>
                 <script type="text/javascript">
                 function SetAllCheckBoxes(FormName, FieldName, CheckValue)
@@ -2325,10 +2349,10 @@ $db = "'.$db_name.'";            # Database with UNS tables
                 }
                 </script>
                 <?php
-                $result->free();
-                $sql = "SELECT * FROM `friendly` WHERE `client` like '$client_get'";
-                $result = $conn->query($sql,1);
-                $friendly = $result->fetch_array(1);
+                $stmt = $conn->prepare("SELECT * FROM `friendly` WHERE `client` = ?");
+                $stmt->bind_param("s", $client_get);
+                $stmt->execute();
+                $friendly = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
                 ?>
                 <table border="1px" align="center">
                     <tr valign="center" class="client_table_head">
@@ -2341,8 +2365,8 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                     <td width="80%">
                                     <br />
                                         <form name="client_rename" action="?func=rename_client&client=<?php echo $client_get;?>" method="POST">
-                                            <input type="text" name="client_name" style="width:400px;" value="<?php echo $friendly['friendly']; ?>"/>
-                                            <input type="hidden" name="client_id" value="<?php echo $friendly['id']; ?>"/>
+                                            <input type="text" name="client_name" style="width:400px;" value="<?php echo htmlspecialchars($friendly['friendly'] ?? '', ENT_QUOTES); ?>"/>
+                                            <input type="hidden" name="client_id" value="<?php echo (int)($friendly['id'] ?? 0); ?>"/>
                                             <input type="submit" value="Rename"/>
                                         </form>
                                     </td>
@@ -2350,10 +2374,10 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                         <?php
                                         if($led_blink)
                                         {
-                                            $result->free();
-                                            $sql = "SELECT led FROM `allowed_clients` WHERE `client_name` like '$client_get'";
-                                            $result = $conn->query($sql,1);
-                                            $led = $result->fetch_array(1);
+                                            $stmt = $conn->prepare("SELECT led FROM `allowed_clients` WHERE `client_name` = ?");
+                                            $stmt->bind_param("s", $client_get);
+                                            $stmt->execute();
+                                            $led = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
                                         ?>
                                         LED Group:<br/>
                                         <form name="client_led" action="?func=client_led_set" method="POST">
@@ -2397,54 +2421,56 @@ $db = "'.$db_name.'";            # Database with UNS tables
                     </tr>
                     <?php
                     $link = mysqli_connect($server, $username, $password, $db);
-                    $sql = "SELECT * FROM `".$client_get."_links` ORDER BY `url` ASC";
-                    $result1 = mysqli_query($link,$sql);
+                    $result1 = mysqli_query($link, "SELECT * FROM `".$client_get."_links` ORDER BY `url` ASC");
                     if(mysqli_num_rows($result1) > 0)
                     {
-                        while($links = mysqli_fetch_array($result1))
+                        while($links = mysqli_fetch_array($result1, MYSQLI_ASSOC))
                         {
+                            $link_url_esc = htmlspecialchars($links['url'], ENT_QUOTES);
                             ?>
                     <tr class="client_table_body">
                         <td>
-                            <?php 
-                            echo '<a class="links" href="'.$links['url'].'" target="_blank">'.$links['url'].'</a>';
+                            <?php
+                            echo '<a class="links" href="'.$link_url_esc.'" target="_blank">'.$link_url_esc.'</a>';
                             $parse_url = parse_url($links['url']);
-                            if(str_replace("/","",$host) == $parse_url['host'])
+                            if(str_replace("/","",$host) == ($parse_url['host'] ?? null))
                             {
                                 $exp_url = explode("?", html_entity_decode($links['url']));
-                                $query_url = $exp_url[1];
+                                $query_url = $exp_url[1] ?? '';
                                 $query_ = array();
                                 $exp = explode('&',$query_url);
                                 foreach($exp as $e)
                                 {
                                     $qur = explode("=", $e);
-                                    $query_[$qur[0]] = $qur[1];
+                                    $query_[$qur[0]] = $qur[1] ?? '';
                                 }
-                                $id = $query_['id'];
-                                
-                                switch($query_['type'])
+                                $id = (int)($query_['id'] ?? 0);
+
+                                switch($query_['type'] ?? '')
                                 {
                                     case "rss":
-                                        $sql = "SELECT * FROM `rss_feeds` WHERE `id` = '$id'";
-                                        $result2 = mysqli_query($link,$sql);
-                                        $rss = mysqli_fetch_array($result2);
-                                        echo " (".$rss['name'].")";
+                                        $stmt2 = mysqli_prepare($link, "SELECT * FROM `rss_feeds` WHERE `id` = ?");
+                                        mysqli_stmt_bind_param($stmt2, "i", $id);
+                                        mysqli_stmt_execute($stmt2);
+                                        $rss = mysqli_fetch_array(mysqli_stmt_get_result($stmt2), MYSQLI_ASSOC);
+                                        if($rss){echo " (".htmlspecialchars($rss['name'], ENT_QUOTES).")";}
                                         break;
                                     case "c_message":
-                                        $sql = "SELECT * FROM `c_messages` WHERE `id` = '$id'";
-                                        $result2 = mysqli_query($link,$sql);
-                                        $c_mesg = mysqli_fetch_array($result2);
-                                        echo " (".$c_mesg['name'].")";
+                                        $stmt2 = mysqli_prepare($link, "SELECT * FROM `c_messages` WHERE `id` = ?");
+                                        mysqli_stmt_bind_param($stmt2, "i", $id);
+                                        mysqli_stmt_execute($stmt2);
+                                        $c_mesg = mysqli_fetch_array(mysqli_stmt_get_result($stmt2), MYSQLI_ASSOC);
+                                        if($c_mesg){echo " (".htmlspecialchars($c_mesg['name'], ENT_QUOTES).")";}
                                         break;
                                 }
                             }
                             ?>
                         </td>
                         <td align="center">
-                            <input type='text' style="width:45px;" name="refresh_time[]" value='<?php echo $links['refresh'];?>'>
-                            <input type="hidden" name="URLid[]" value="<?php echo $links['id'];?>">
+                            <input type='text' style="width:45px;" name="refresh_time[]" value='<?php echo (int)$links['refresh'];?>'>
+                            <input type="hidden" name="URLid[]" value="<?php echo (int)$links['id'];?>">
                         </td>
-                        <th><input type="checkbox" name="urls[]" value="<?php echo $links['id'];?>"></th>
+                        <th><input type="checkbox" name="urls[]" value="<?php echo (int)$links['id'];?>"></th>
 
                     </tr>
                             <?php
@@ -2514,19 +2540,18 @@ $db = "'.$db_name.'";            # Database with UNS tables
                         <th>+/-</th><th>Name</th><th>Date</th><th>Options</th>
                     </tr>
                 <?php
-                $sql = "SELECT * FROM `saved_lists` ORDER by `id` DESC";
-                $result->free();
-                $result = $conn->query($sql,1);
+                $result = $conn->query("SELECT * FROM `saved_lists` ORDER by `id` DESC", MYSQLI_STORE_RESULT);
                 $tablerowid = 0;
-                while($client_arc = $result->fetch_array(1))
+                while($client_arc = $result->fetch_array(MYSQLI_ASSOC))
                 {
+                    $arc_urls_esc = htmlspecialchars($client_arc['urls'], ENT_QUOTES);
                     ?>
                     <tr class="client_table_body">
                         <td
                             onclick="expandcontract('SavedRow<?php echo $tablerowid;?>','SavedClickIcon<?php echo $tablerowid;?>')"
                             id="SavedClickIcon<?php echo $tablerowid;?>" style="cursor: pointer; cursor: hand;">+</td>
                         <td>
-                            <?php echo $client_arc['name'];?>
+                            <?php echo htmlspecialchars($client_arc['name'], ENT_QUOTES);?>
                         </td>
                         <td>
                             <?php echo date('F j, Y, g:i a', $client_arc['date']);?>
@@ -2536,13 +2561,13 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                 <tr>
                                     <td>
                                         <form name="saved" action="?func=edit_urls&client=<?php echo $client_get;?>&cl_func=restore" method="POST">
-                                            <input type="hidden" name="urls" value="<?php echo $client_arc['urls']; ?>">
+                                            <input type="hidden" name="urls" value="<?php echo $arc_urls_esc; ?>">
                                             <input type='submit' value='Restore'>
                                         </form>
                                     </td>
                                     <td>
                                         <form name="saved" action="?func=edit_urls&client=<?php echo $client_get;?>&cl_func=remove" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo $client_arc['id']; ?>">
+                                            <input type="hidden" name="id" value="<?php echo (int)$client_arc['id']; ?>">
                                             <input type='submit' value='Remove'>
                                         </form>
                                     </td>
@@ -2562,7 +2587,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                         {
                             ?>
                         <tr class="client_table_body">
-                            <td><?php echo $url;?></td>
+                            <td><?php echo htmlspecialchars($url, ENT_QUOTES);?></td>
                         </tr>
                         <?php
                         }
@@ -2585,30 +2610,32 @@ $db = "'.$db_name.'";            # Database with UNS tables
                         <th>+/-</th><th>Name</th><th>Date</th><th>Options</th>
                     </tr>
                 <?php
-                $sql = "SELECT * FROM `archive_links` WHERE `client` = '$client_get' ORDER by `date` ASC";
-                $result->free();
-                $result = $conn->query($sql,1);
+                $stmt = $conn->prepare("SELECT * FROM `archive_links` WHERE `client` = ? ORDER by `date` ASC");
+                $stmt->bind_param("s", $client_get);
+                $stmt->execute();
+                $result = $stmt->get_result();
                 $tablerowid = 0;
-                while($client_arc = $result->fetch_array(1))
+                while($client_arc = $result->fetch_array(MYSQLI_ASSOC))
                 {
+                    $arc_urls_esc = htmlspecialchars($client_arc['urls'], ENT_QUOTES);
                     ?>
                     <tr class="client_table_body">
                         <td onclick="expandcontract('Row<?php echo $tablerowid;?>','ClickIcon<?php echo $tablerowid;?>')"
                             id="ClickIcon<?php echo $tablerowid;?>" style="cursor: pointer; cursor: hand;">+</td>
-                        <td><?php echo $client_arc['name'];?></td>
+                        <td><?php echo htmlspecialchars($client_arc['name'], ENT_QUOTES);?></td>
                         <td><?php echo date('F j, Y, g:i a', $client_arc['date']);?></td>
                         <td>
                             <table>
                                 <tr>
                                     <td>
                                         <form name="saved" action="?func=edit_urls&client=<?php echo $client_get;?>&cl_func=restore" method="POST">
-                                            <input type="hidden" name="urls" value="<?php echo $client_arc['urls']; ?>">
+                                            <input type="hidden" name="urls" value="<?php echo $arc_urls_esc; ?>">
                                             <input type='submit' name="copy" value='Restore'>
                                         </form>
                                     </td>
                                     <td>
                                         <form name="saved" action="?func=rm_arc_urls&client=<?php echo $client_get;?>" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo $client_arc['id']; ?>">
+                                            <input type="hidden" name="id" value="<?php echo (int)$client_arc['id']; ?>">
                                             <input type='submit' name="copy" value='Remove'>
                                         </form>
                                     </td>
@@ -2628,7 +2655,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                         {
                             ?>
                         <tr class="client_table_body">
-                            <td><?php echo $url;?></td>
+                            <td><?php echo htmlspecialchars($url, ENT_QUOTES);?></td>
                         </tr>
                         <?php
                         }
@@ -2652,10 +2679,10 @@ $db = "'.$db_name.'";            # Database with UNS tables
             if($perms['edit_urls'])
             {
                 $client_get = filter_input(INPUT_GET, 'client', FILTER_SANITIZE_SPECIAL_CHARS);
-                $id = filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
-                $sql = "DELETE FROM `archive_links` WHERE `id` = '$id'";
-                $result->free();
-                if($conn->query($sql))
+                $id = (int)filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
+                $stmt = $conn->prepare("DELETE FROM `archive_links` WHERE `id` = ?");
+                $stmt->bind_param("i", $id);
+                if($stmt->execute())
                 {
                     echo "Removed Archived List";
                    ?>
@@ -2665,7 +2692,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                 <?php
                 }else
                 {
-                    echo "Failed to Removed Archived List.<br />\r\n".$conn->error;
+                    echo "Failed to Removed Archived List.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                 }
 
             }else
@@ -2677,14 +2704,17 @@ $db = "'.$db_name.'";            # Database with UNS tables
             if($perms['edit_urls'])
             {
                 $friendly = filter_input(INPUT_POST, 'friendly', FILTER_SANITIZE_SPECIAL_CHARS);
-                $client_ID = md5(rand(0000000000,9999999999));
-                $sql = "INSERT INTO `friendly` (`id`, `friendly`, `client`) VALUES ('', '$friendly', '$client_ID')";
-                $result->free();
-                if($conn->query($sql))
+                $friendly_esc = htmlspecialchars((string)$friendly, ENT_QUOTES);
+                $client_ID = md5(random_int(0, PHP_INT_MAX).microtime());
+                $stmt = $conn->prepare("INSERT INTO `friendly` (`friendly`, `client`) VALUES (?, ?)");
+                $stmt->bind_param("ss", $friendly, $client_ID);
+                if($stmt->execute())
                 {
-                    $sql = "INSERT INTO `allowed_clients` (`id`, `client_name`) VALUES ('', '$client_ID')";
-                    if($conn->query($sql))
+                    $stmt2 = $conn->prepare("INSERT INTO `allowed_clients` (`client_name`) VALUES (?)");
+                    $stmt2->bind_param("s", $client_ID);
+                    if($stmt2->execute())
                     {
+                        # $client_ID is always a 32-char hex md5, always a safe bare identifier here.
                         $sql = "CREATE TABLE IF NOT EXISTS `".$client_ID."_links` (
       `id` int(255) NOT NULL AUTO_INCREMENT,
       `url` varchar(255) NOT NULL,
@@ -2695,7 +2725,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
     ) ENGINE=MyISAM  DEFAULT CHARSET=utf8 AUTO_INCREMENT=1";
                         if($conn->query($sql))
                         {
-                            echo "Created link table for `$friendly`<br />"
+                            echo "Created link table for `$friendly_esc`<br />";
                             ?>
                     <script>
                         setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php'",<?php echo $page_timeout;?>);
@@ -2703,15 +2733,15 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <?php
                         }else
                         {
-                            echo "Failed to create link table for `$friendly`<br />".$conn->error;
+                            echo "Failed to create link table for `$friendly_esc`<br />".htmlspecialchars($conn->error, ENT_QUOTES);
                         }
                     }else
                     {
-                        echo "Failed to insert into `allowed_clients` table<br />".$conn->error;
+                        echo "Failed to insert into `allowed_clients` table<br />".htmlspecialchars($conn->error, ENT_QUOTES);
                     }
                 }else
                 {
-                    echo "Failed to insert into `friendly` table<br />Probably a Duplicate name, check the SQL error below<br />".$conn->error;
+                    echo "Failed to insert into `friendly` table<br />Probably a Duplicate name, check the SQL error below<br />".htmlspecialchars($conn->error, ENT_QUOTES);
                 }
             }else
             {
@@ -2735,27 +2765,26 @@ $db = "'.$db_name.'";            # Database with UNS tables
                         ?><th>Permissions</th><th>Options</th>
                     </tr>
                     <?php
-                    $sql = "SELECT * FROM allowed_users WHERE `username` NOT LIKE 'unsadmin'";
-                    $result->free();
-                    $result = $conn->query($sql,1);
-                    if($result->num_rows < 1)
+                    $result = $conn->query("SELECT * FROM allowed_users WHERE `username` != 'unsadmin'", MYSQLI_STORE_RESULT);
+                    if($result->num_rows > 0)
                     {
-                        while($array = $result->fetch_array(1))
+                        while($array = $result->fetch_array(MYSQLI_ASSOC))
                         {
                         ?>
                     <tr class="client_table_body">
                         <td align="Center">
-                                <?php echo $array['username'];?>
+                                <?php echo htmlspecialchars($array['username'], ENT_QUOTES);?>
                         </td>
                         <?php
                         $link = mysqli_connect($server, $username, $password, $db);
-                        $sql = "SELECT id,password FROM `internal_users` WHERE `username` = '".$array['username']."'";
-                        $result1 = mysqli_query($link,$sql);
-                        $int_usr = mysqli_fetch_array($result1);
-                        if(!$int_usr['password'])
+                        $stmt1 = mysqli_prepare($link, "SELECT id,password FROM `internal_users` WHERE `username` = ?");
+                        mysqli_stmt_bind_param($stmt1, "s", $array['username']);
+                        mysqli_stmt_execute($stmt1);
+                        $int_usr = mysqli_fetch_array(mysqli_stmt_get_result($stmt1), MYSQLI_ASSOC);
+                        if(empty($int_usr['password']))
                         {?>
                         <td align="Center">
-                                <?php echo $array['domain'];?>
+                                <?php echo htmlspecialchars($array['domain'], ENT_QUOTES);?>
                         </td>
                         <?php
                         }else
@@ -2763,7 +2792,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             ?>
                         <td align="Center">
                             <form action="?func=edit_user&set=reset_pwd" method="POST">
-                                <input type="hidden" name="id" value="<?php echo $int_usr['id'];?>"/>
+                                <input type="hidden" name="id" value="<?php echo (int)$int_usr['id'];?>"/>
                                 <input type="password" name="password" value=""/>
                                 <input type="submit" value="Reset Password" />
                             </form>
@@ -2776,21 +2805,21 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                 <tr>
                                     <td align="center">
                                         <form action="?func=edit_user&set=urls" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo $array['id'];?>"/>
+                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
                                             <input type="hidden" name="edit_urls" value="<?php if($array['edit_urls']){echo "0";}else{echo "1";}?>"/>
                                             <input type="submit" value="<?php if($array['edit_urls']){echo "Deny";}else{echo "Allow";}?> Edit Clients" />
                                         </form>
                                     </td>
                                     <td align="center">
                                         <form action="?func=edit_user&set=emerg" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo $array['id'];?>"/>
+                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
                                             <input type="hidden" name="edit_emerg" value="<?php if($array['edit_emerg']){echo "0";}else{echo "1";}?>"/>
                                             <input type="submit" value="<?php if($array['edit_emerg']){echo "Deny";}else{echo "Allow";}?> Edit Emergency" />
                                         </form>
                                     </td>
                                     <td align="center">
                                         <form action="?func=edit_user&set=user" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo $array['id'];?>"/>
+                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
                                             <input type="hidden" name="edit_user" value="<?php if($array['edit_users']){echo "0";}else{echo "1";}?>"/>
                                             <input type="submit" value="<?php if($array['edit_users']){echo "Deny";}else{echo "Allow";}?> Edit Users" />
                                         </form>
@@ -2799,21 +2828,21 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                 <tr>
                                     <td align="center">
                                         <form action="?func=edit_user&set=c_messages" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo $array['id'];?>"/>
+                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
                                             <input type="hidden" name="c_messages" value="<?php if($array['c_messages']){echo "0";}else{echo "1";}?>"/>
                                             <input type="submit" value="<?php if($array['c_messages']){echo "Deny";}else{echo "Allow";}?> Custom Messages" />
                                         </form>
                                     </td>
                                     <td align="center">
                                         <form action="?func=edit_user&set=rss_feeds" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo $array['id'];?>"/>
+                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
                                             <input type="hidden" name="rss_feeds" value="<?php if($array['rss_feeds']){echo "0";}else{echo "1";}?>"/>
                                             <input type="submit" value="<?php if($array['rss_feeds']){echo "Deny";}else{echo "Allow";}?> Rss Feeds" />
                                         </form>
                                     </td>
                                     <td align="center">
                                         <form action="?func=edit_user&set=edit_options" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo $array['id'];?>"/>
+                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
                                             <input type="hidden" name="edit_options" value="<?php if($array['edit_options']){echo "0";}else{echo "1";}?>"/>
                                             <input type="submit" value="<?php if($array['edit_options']){echo "Deny";}else{echo "Allow";}?> UNS Options" />
                                         </form>
@@ -2823,7 +2852,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                         </td>
                         <td align="Center">
                             <form action="?func=remove_user" method="POST">
-                                <input type="hidden" name="id" value="<?php echo $array['id'];?>"/>
+                                <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
                                 <input type="submit" value="Remove" />
                             </form>
                         </td>
@@ -2893,12 +2922,10 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                     <td align="Center">
                                         <form action="?func=edit_user&set=reset_pwd" method="POST">
                                             <?php
-                                            $result->free();
-                                            $sql = "SELECT id FROM `internal_users` WHERE `username` = 'unsadmin' LIMIT 1";
-                                            $result = $conn->query($sql,1);
-                                            $admusr = $result->fetch_array(1);
+                                            $result = $conn->query("SELECT id FROM `internal_users` WHERE `username` = 'unsadmin' LIMIT 1", MYSQLI_STORE_RESULT);
+                                            $admusr = $result->fetch_array(MYSQLI_ASSOC);
                                             ?>
-                                            <input type="hidden" name="id" value="<?php echo $admusr['id'];?>" />
+                                            <input type="hidden" name="id" value="<?php echo (int)($admusr['id'] ?? 0);?>" />
                                             <input type="password" name="password" value="" />
                                             <input type="submit" value="Reset Admin Password" />
                                         </form>
@@ -2906,10 +2933,8 @@ $db = "'.$db_name.'";            # Database with UNS tables
                                     <td>
                                         <form action="?func=toggle_builtin" method="POST">
                                          <?php
-                                        $result->free();
-                                        $sql = "SELECT * FROM settings LIMIT 1";
-                                        $result = $conn->query($sql,1);
-                                        $array1 = $result->fetch_array(1);
+                                        $result = $conn->query("SELECT * FROM settings LIMIT 1", MYSQLI_STORE_RESULT);
+                                        $array1 = $result->fetch_array(MYSQLI_ASSOC);
                                         ?>
                                             <input type="hidden" name="toggle_admin" value="<?php if($array1['built_in_admin']){echo "0";}else{echo "1";}?>"/>
                                             <input type="submit" value="<?php if($array1['built_in_admin']){echo "Disable";}else{echo "Enable";}?> Built in Admin" />
@@ -2929,19 +2954,20 @@ $db = "'.$db_name.'";            # Database with UNS tables
         case "remove_user":
             if($perms['edit_users'])
             {
-                $id = filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
-                $result->free();
-                $sql = "SELECT username,domain FROM `allowed_users` WHERE `id` = '$id' LIMIT 1";
-                $result1 = $conn->query($sql,1);
-                $array1 = $result1->fetch_array(1);
-                $result1->free();
-                $sql = "DELETE FROM `allowed_users` WHERE `id` = '$id'";
-                if($conn->query($sql,1))
+                $id = (int)filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
+                $stmt = $conn->prepare("SELECT username,domain FROM `allowed_users` WHERE `id` = ? LIMIT 1");
+                $stmt->bind_param("i", $id);
+                $stmt->execute();
+                $array1 = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                $del_stmt = $conn->prepare("DELETE FROM `allowed_users` WHERE `id` = ?");
+                $del_stmt->bind_param("i", $id);
+                if($del_stmt->execute())
                 {
-                    if($array1['domain']=='')
+                    if(($array1['domain'] ?? '')=='')
                     {
-                        $sql = "DELETE FROM `internal_users` WHERE `username` = '".$array1['username']."'";
-                        if($conn->query($sql))
+                        $del_stmt2 = $conn->prepare("DELETE FROM `internal_users` WHERE `username` = ?");
+                        $del_stmt2->bind_param("s", $array1['username']);
+                        if($del_stmt2->execute())
                         {
                             echo "Removed Internal user.";
                             ?>
@@ -2951,7 +2977,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <?php
                         }else
                         {
-                            echo "Failed to Remove Internal User.<br />".$conn->error;
+                            echo "Failed to Remove Internal User.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
                             break;
                         }
                     }else
@@ -2965,7 +2991,7 @@ $db = "'.$db_name.'";            # Database with UNS tables
                     }
                 }else
                 {
-                    echo "Failed to remove user ($id).<br />\r\n".$conn->error;
+                    echo "Failed to remove user ($id).<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                 }
             }else
             {
@@ -2975,22 +3001,21 @@ $db = "'.$db_name.'";            # Database with UNS tables
         case "toggle_builtin":
             if($perms['edit_users'])
             {
-                $toggle_admin = filter_input(INPUT_POST, 'toggle_admin', FILTER_SANITIZE_SPECIAL_CHARS);
-                $result->free();
-                $sql = "UPDATE `settings` SET `built_in_admin` = '$toggle_admin' WHERE `id` = '1'";
-                echo $sql."<br />";
-                if($conn->query($sql, 1))
+                $toggle_admin = (int)filter_input(INPUT_POST, 'toggle_admin', FILTER_SANITIZE_SPECIAL_CHARS);
+                $stmt = $conn->prepare("UPDATE `settings` SET `built_in_admin` = ? WHERE `id` = 1");
+                $stmt->bind_param("i", $toggle_admin);
+                if($stmt->execute())
                 {
                     if($toggle_admin){echo "Disabled";}else{echo "Enabled";}
                     echo " Built in Admin";
                     ?>
             <script>
                 setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-            </script> -->
+            </script>
                     <?php
                 }else
                 {
-                    echo "Failed Update.<br />".$conn->error;
+                    echo "Failed Update.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
                 }
             }else
             {
@@ -3002,15 +3027,14 @@ $db = "'.$db_name.'";            # Database with UNS tables
             {
                 $user = filter_input(INPUT_POST, 'user_N', FILTER_SANITIZE_SPECIAL_CHARS);
                 $internal_user = @filter_input(INPUT_POST, 'internal_user', FILTER_SANITIZE_SPECIAL_CHARS);
-                $result->free();
                 if(!$internal_user)
                 {
                     $domain = @filter_input(INPUT_POST, 'domain_N', FILTER_SANITIZE_SPECIAL_CHARS);
-                    $sql = "INSERT INTO `allowed_users` (`id`, `username`, `domain`, `edit_urls`, `edit_emerg`, `edit_users`)
-                    VALUES ('', '$user', '$domain', '1', '0', '0')";
-                    if($conn->query($sql))
+                    $stmt = $conn->prepare("INSERT INTO `allowed_users` (`username`, `domain`, `edit_urls`, `edit_emerg`, `edit_users`) VALUES (?, ?, 1, 0, 0)");
+                    $stmt->bind_param("ss", $user, $domain);
+                    if($stmt->execute())
                     {
-                        echo "Added new User ($domain\\$user).";
+                        echo "Added new User (".htmlspecialchars((string)$domain, ENT_QUOTES)."\\".htmlspecialchars((string)$user, ENT_QUOTES).").";
                         ?>
                       <script>
                             setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
@@ -3018,21 +3042,21 @@ $db = "'.$db_name.'";            # Database with UNS tables
                         <?php
                     }else
                     {
-                        echo "Failed to add new User.<br />\r\n".$conn->error;
+                        echo "Failed to add new User.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                     }
                 }else
                 {
                     $pwd = @filter_input(INPUT_POST, 'pwd_N', FILTER_SANITIZE_SPECIAL_CHARS);
-                    $pwd = md5($pwd.$seed);
-                    $sql = "INSERT INTO `allowed_users` (`id`, `username`, `domain`, `edit_urls`, `edit_emerg`, `edit_users`)
-                    VALUES ('', '$user', '', '1', '0', '0')";
-                    if($conn->query($sql))
+                    $pwd_hash = password_hash((string)$pwd, PASSWORD_DEFAULT);
+                    $stmt = $conn->prepare("INSERT INTO `allowed_users` (`username`, `domain`, `edit_urls`, `edit_emerg`, `edit_users`) VALUES (?, '', 1, 0, 0)");
+                    $stmt->bind_param("s", $user);
+                    if($stmt->execute())
                     {
-                        $sql = "INSERT INTO `internal_users` (`id`, `username`, `password`, `disabled`, `failed`)
-                        VALUES ('', '$user', '$pwd', '0', '0')";
-                        if($conn->query($sql))
+                        $stmt2 = $conn->prepare("INSERT INTO `internal_users` (`username`, `password`, `disabled`, `failed`) VALUES (?, ?, 0, 0)");
+                        $stmt2->bind_param("ss", $user, $pwd_hash);
+                        if($stmt2->execute())
                         {
-                            echo "Added new Internal User ($user).";
+                            echo "Added new Internal User (".htmlspecialchars((string)$user, ENT_QUOTES).").";
                             ?>
                            <script>
                                 setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
@@ -3040,11 +3064,11 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <?php
                         }else
                         {
-                            echo "Failed to add new User.<br />\r\n".$conn->error;
+                            echo "Failed to add new User.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                         }
                     }else
                     {
-                        echo "Failed to add new User.<br />\r\n".$conn->error;
+                        echo "Failed to add new User.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                     }
                 }
             }else
@@ -3055,138 +3079,54 @@ $db = "'.$db_name.'";            # Database with UNS tables
         case "edit_user":
             if($perms['edit_users'])
             {
-                $id = filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
+                $id = (int)filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
                 $set = filter_input(INPUT_GET, 'set', FILTER_SANITIZE_SPECIAL_CHARS);
-                switch($set)
+                # map each toggle to its column name, since the update logic (and the
+                # SQL injection / escaping fix) is otherwise identical for all of them.
+                $toggle_fields = array(
+                    'urls' => array('edit_urls', 'edit_urls', 'Edit_URL'),
+                    'emerg' => array('edit_emerg', 'edit_emerg', 'Edit_Emerg'),
+                    'user' => array('edit_user', 'edit_users', 'Edit_User'),
+                    'c_messages' => array('c_messages', 'c_messages', 'c_messages'),
+                    'rss_feeds' => array('rss_feeds', 'rss_feeds', 'rss_feeds'),
+                    'edit_options' => array('edit_options', 'edit_options', 'edit_options'),
+                );
+                if(isset($toggle_fields[$set]))
                 {
-                    case "urls":
-                        $edit_urls = filter_input(INPUT_POST, 'edit_urls', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $result->free();
-                        $sql = "UPDATE `allowed_users` SET `edit_urls` = '$edit_urls' WHERE `id` = '$id'";
-                        echo $sql."<br />";
-                        if($conn->query($sql, 1))
-                        {
-                            echo "Updated Edit_URL field.";
-                            ?>
+                    list($post_field, $column, $label) = $toggle_fields[$set];
+                    $value = (int)filter_input(INPUT_POST, $post_field, FILTER_SANITIZE_SPECIAL_CHARS);
+                    $stmt = $conn->prepare("UPDATE `allowed_users` SET `$column` = ? WHERE `id` = ?");
+                    $stmt->bind_param("ii", $value, $id);
+                    if($stmt->execute())
+                    {
+                        echo "Updated $label field.";
+                        ?>
                     <script>
                         setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
                     </script>
                             <?php
-                        }else
-                        {
-                            echo "Failed Update.<br />".$conn->error;
-                        }
-                        break;
-                    case "emerg":
-                        $edit_emerg = filter_input(INPUT_POST, 'edit_emerg', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $result->free();
-                        $sql = "UPDATE `allowed_users` SET `edit_emerg` = '$edit_emerg' WHERE `id` = '$id'";
-                        echo $sql."<br />";
-                        if($conn->query($sql, 1))
-                        {
-                            echo "Updated Edit_Emerg field.";
-                            ?>
+                    }else
+                    {
+                        echo "Failed Update.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                    }
+                }elseif($set === "reset_pwd")
+                {
+                    $reset_pwd = filter_input(INPUT_POST, 'password', FILTER_SANITIZE_SPECIAL_CHARS);
+                    $r_pwd = password_hash((string)$reset_pwd, PASSWORD_DEFAULT);
+                    $stmt = $conn->prepare("UPDATE `internal_users` SET `password` = ? WHERE `id` = ?");
+                    $stmt->bind_param("si", $r_pwd, $id);
+                    if($stmt->execute())
+                    {
+                        echo "Changed User Password.";
+                        ?>
                     <script>
                         setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
                     </script>
                             <?php
-                        }else
-                        {
-                            echo "Failed Update.<br />".$conn->error;
-                        }
-                        break;
-                    case "user":
-                        $edit_users = filter_input(INPUT_POST, 'edit_user', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $result->free();
-                        $sql = "UPDATE `allowed_users` SET `edit_users` = '$edit_users' WHERE `id` = '$id'";
-                        echo $sql."<br />";
-                        if($conn->query($sql, 1))
-                        {
-                            echo "Updated Edit_User field.";
-                            ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-                    </script>
-                            <?php
-                        }else
-                        {
-                            echo "Failed Update.<br />".$conn->error;
-                        }
-                        break;
-                    case "c_messages":
-                        $c_messages = filter_input(INPUT_POST, 'c_messages', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $result->free();
-                        $sql = "UPDATE `allowed_users` SET `c_messages` = '$c_messages' WHERE `id` = '$id'";
-                        echo $sql."<br />";
-                        if($conn->query($sql, 1))
-                        {
-                            echo "Updated c_messages field.";
-                            ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-                    </script>
-                            <?php
-                        }else
-                        {
-                            echo "Failed Update.<br />".$conn->error;
-                        }
-                        break;
-                    case "rss_feeds":
-                        $rss_feeds = filter_input(INPUT_POST, 'rss_feeds', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $result->free();
-                        $sql = "UPDATE `allowed_users` SET `rss_feeds` = '$rss_feeds' WHERE `id` = '$id'";
-                        echo $sql."<br />";
-                        if($conn->query($sql, 1))
-                        {
-                            echo "Updated rss_feeds field.";
-                            ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-                    </script>
-                            <?php
-                        }else
-                        {
-                            echo "Failed Update.<br />".$conn->error;
-                        }
-                        break;
-                    case "edit_options":
-                        $edit_options = filter_input(INPUT_POST, 'edit_options', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $result->free();
-                        $sql = "UPDATE `allowed_users` SET `edit_options` = '$edit_options' WHERE `id` = '$id'";
-                        echo $sql."<br />";
-                        if($conn->query($sql, 1))
-                        {
-                            echo "Updated edit_options field.";
-                            ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-                    </script>
-                            <?php
-                        }else
-                        {
-                            echo "Failed Update.<br />".$conn->error;
-                        }
-                        break;
-                    case "reset_pwd":
-                        $id = filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $reset_pwd = filter_input(INPUT_POST, 'password', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $r_pwd = md5($reset_pwd.$seed);
-                        $sql = "UPDATE `internal_users` SET `password` = '$r_pwd' WHERE `id` = '$id'";
-                        echo $sql."<br />";
-                        $result->free();
-                        if($conn->query($sql, 1))
-                        {
-                            echo "Changed User Password.";
-                            ?>
-                    <script>
-                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",<?php echo $page_timeout;?>);
-                    </script>
-                            <?php
-                        }else
-                        {
-                            echo "Failed to Update User Password.<br />".$conn->error;
-                        }
-                        break;
+                    }else
+                    {
+                        echo "Failed to Update User Password.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                    }
                 }
             }else
             {
@@ -3205,19 +3145,26 @@ $db = "'.$db_name.'";            # Database with UNS tables
                     <?php
                     break;
                 }
-                $result->free();
                 foreach($_POST['remove'] as $id)
                 {
-                    $sql = "DELETE FROM `allowed_clients` WHERE `client_name` = '$id'";
-                    if($conn->query($sql))
+                    $id_esc = htmlspecialchars((string)$id, ENT_QUOTES);
+                    if(!is_safe_client_id($id))
                     {
-                        $sql = "DELETE FROM `friendly` WHERE `client` = '$id'";
-                        if($conn->query($sql))
+                        echo "Skipped invalid client [$id_esc]<br />\r\n";
+                        continue;
+                    }
+                    $stmt = $conn->prepare("DELETE FROM `allowed_clients` WHERE `client_name` = ?");
+                    $stmt->bind_param("s", $id);
+                    if($stmt->execute())
+                    {
+                        $stmt2 = $conn->prepare("DELETE FROM `friendly` WHERE `client` = ?");
+                        $stmt2->bind_param("s", $id);
+                        if($stmt2->execute())
                         {
-                            $sql = "DROP TABLE `".$id."_links`";
-                            if($conn->query($sql))
+                            # $id is whitelisted by is_safe_client_id() above, safe as a table name here.
+                            if($conn->query("DROP TABLE `".$id."_links`"))
                             {
-                                echo "Removed client [$id]<br />\r\n";
+                                echo "Removed client [$id_esc]<br />\r\n";
                                 ?>
                     <script>
                         setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php'",<?php echo $page_timeout;?>);
@@ -3225,15 +3172,15 @@ $db = "'.$db_name.'";            # Database with UNS tables
                             <?php
                             }else
                             {
-                                echo "Failed to drop table `".$id."_links`<br />".$conn->error;
+                                echo "Failed to drop table `".$id_esc."_links`<br />".htmlspecialchars($conn->error, ENT_QUOTES);
                             }
                         }else
                         {
-                            echo "Failed to remove client [$id] from friendly<br />\r\n".$conn->error;
+                            echo "Failed to remove client [$id_esc] from friendly<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                         }
                     }else
                     {
-                        echo "Failed to remove client [$id] from allowed list<br />\r\n".$conn->error;
+                        echo "Failed to remove client [$id_esc] from allowed list<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
                     }
                 }
             }else
@@ -3271,33 +3218,32 @@ $db = "'.$db_name.'";            # Database with UNS tables
                         <th>Client</th><th>Last Connect</th><th>Last URL</th><th>Remove</th>
                     </tr>
                     <?php
-                    $sql = "SELECT allowed_clients.id, friendly.friendly, friendly.client
+                    $result = $conn->query("SELECT allowed_clients.id, friendly.friendly, friendly.client
 FROM allowed_clients, friendly
 WHERE friendly.client = allowed_clients.client_name
-ORDER BY friendly+0, friendly";
-                    $result->free();
-                    $result = $conn->query($sql,1);
+ORDER BY friendly+0, friendly", MYSQLI_STORE_RESULT);
                     $rows = 0;
-                    while($array = $result->fetch_array(1))
+                    $conn2 = mysqli_connect($server, $username, $password, $db);
+                    while($array = $result->fetch_array(MYSQLI_ASSOC))
                     {
                         $client = $array['client'];
-                        $sql1 = "SELECT * FROM `connections` WHERE `client` LIKE '$client' ORDER by `last_conn` DESC LIMIT 1";
-                        #echo $sql1."<BR>";
-                        $conn2 = mysqli_connect($server, $username, $password, $db);
-                        $result2 = mysqli_query($conn2, $sql1);
-                        $array2 = mysqli_fetch_array($result2);
+                        $client_esc = htmlspecialchars($client, ENT_QUOTES);
+                        $stmt1 = mysqli_prepare($conn2, "SELECT * FROM `connections` WHERE `client` = ? ORDER by `last_conn` DESC LIMIT 1");
+                        mysqli_stmt_bind_param($stmt1, "s", $client);
+                        mysqli_stmt_execute($stmt1);
+                        $array2 = mysqli_fetch_array(mysqli_stmt_get_result($stmt1), MYSQLI_ASSOC);
                     ?>
                     <tr class="client_table_body">
                         <td align="center">
-                            <a class="links" href="?func=view_client&client=<?php echo $array['client'];?>"><?php echo $array['friendly'];?></a>
+                            <a class="links" href="?func=view_client&client=<?php echo $client_esc;?>"><?php echo htmlspecialchars($array['friendly'], ENT_QUOTES);?></a>
                         </td>
                         <td align="Center"><?php
-                        echo date("F j, Y, g:i a",$array2['last_conn']);
+                        if(!empty($array2['last_conn'])){echo date("F j, Y, g:i a",$array2['last_conn']);}
                         ?>
                         </td>
                         <td align="Center">
                             <?php
-                        if($array2['last_conn'])
+                        if(!empty($array2['last_conn']))
                         {
                             switch($array2['last_url'])
                             {
@@ -3305,7 +3251,8 @@ ORDER BY friendly+0, friendly";
                                     echo "Client Has No URLS";
                                     break;
                                 default:
-                                    echo '<a class="links" target="_blank" href="'.$array2['last_url'].'">'.$array2['last_url'].'</a>';
+                                    $last_url_esc = htmlspecialchars($array2['last_url'], ENT_QUOTES);
+                                    echo '<a class="links" target="_blank" href="'.$last_url_esc.'">'.$last_url_esc.'</a>';
                                     break;
                             }
                         }else
@@ -3315,7 +3262,7 @@ ORDER BY friendly+0, friendly";
                         ?>
                         </td>
                         <td align="Center">
-                            <input type="checkbox" name="remove[]" value="<?php echo $array['client']; ?>"/>
+                            <input type="checkbox" name="remove[]" value="<?php echo $client_esc; ?>"/>
                         </td>
                     </tr>
                     <?php
@@ -3397,14 +3344,23 @@ function login_check()
         }
 }
 
+# Client names become part of dynamically-named tables ("<name>_links") in many places
+# below, which can't be parameterized in a prepared statement - so they're validated
+# against a strict whitelist wherever that happens, instead.
+function is_safe_client_id($client)
+{
+    return is_string($client) && $client !== "" && preg_match('/^[A-Za-z0-9_]+$/', $client) === 1;
+}
+
 function gen_friendly($client)
 {
     include '../configs/conn.php';
     $conn = new mysqli($server, $username, $password, $db);
-    $sql = "SELECT friendly FROM friendly WHERE `client` like '$client'";
-    $result = $conn->query($sql, 1);
-    $friendly = $result->fetch_array(1);
-    return $friendly['friendly'];
+    $stmt = $conn->prepare("SELECT friendly FROM friendly WHERE `client` = ?");
+    $stmt->bind_param("s", $client);
+    $stmt->execute();
+    $friendly = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+    return $friendly['friendly'] ?? '';
 }
 
 function format_bytes($size) {
@@ -3423,17 +3379,17 @@ function create_cookie($username_login)
     $reg_url = $GLOBALS['reg_url'];
     
     $conn = new mysqli($server, $username, $password, $db);
-    $hash = md5(mt_rand(0000000000000000,9999999999999999));
+    $hash = bin2hex(random_bytes(16)); # session token - must be unguessable, hence a CSPRNG rather than mt_rand()
     if($timeout > 0){$time = time()+$timeout;}else{$time = 0;}
-    
+
     if($root == "" or $root == "/"){$path = "/admin";}else{$path = "/".$root."admin";}
 
     if(setcookie("login_yes", $hash.":".$username_login, $time , $path, '', $SSL, 1))
     {
         echo "Cookie Set\r\n";
-        #$time = time()+$timeout;
-        $sql = "INSERT INTO `hash_links` (`id`, `hash`, `time`, `user`) VALUES ('', '$hash', '$time', '$username_login')";
-        $result = $conn->query($sql);
+        $stmt = $conn->prepare("INSERT INTO `hash_links` (`hash`, `time`, `user`) VALUES (?, ?, ?)");
+        $stmt->bind_param("sis", $hash, $time, $username_login);
+        $result = $stmt->execute();
         if($result)
         {
             echo "<h1>Logged In</h1>";
@@ -3455,27 +3411,31 @@ function create_cookie($username_login)
 
 function check_archives($client)
 {
+    if(!is_safe_client_id($client)){return -1;}
     include "../configs/vars.php";
     include "../configs/conn.php";
     if(!$conn = mysqli_connect($server, $username, $password, $db))
     {return -1;}
-    $sql = "SELECT * FROM `archive_links` WHERE `client` = '$client' ORDER BY `date` ASC";
-    if(!$result = mysqli_query($conn, $sql))
+    $stmt = mysqli_prepare($conn, "SELECT * FROM `archive_links` WHERE `client` = ? ORDER BY `date` ASC");
+    mysqli_stmt_bind_param($stmt, "s", $client);
+    if(!mysqli_stmt_execute($stmt))
     {return 0;}
+    $result = mysqli_stmt_get_result($stmt);
     $rows = mysqli_num_rows($result);
     if($max_archives < $rows)
     {
-        while($arcs = mysqli_fetch_array($result))
+        while($arcs = mysqli_fetch_array($result, MYSQLI_ASSOC))
         {
             if($rows+1 == $max_archives){break;}
-            $sql = "DELETE FROM `archive_links` WHERE `id` = '".$arcs['id']."'";
-            if(mysqli_query($conn, $sql))
+            $del_stmt = mysqli_prepare($conn, "DELETE FROM `archive_links` WHERE `id` = ?");
+            mysqli_stmt_bind_param($del_stmt, "i", $arcs['id']);
+            if(mysqli_stmt_execute($del_stmt))
             {
-                echo "Removed row [".$arcs['id']."]<br />";
+                echo "Removed row [".(int)$arcs['id']."]<br />";
                 $rows--;
             }else
             {
-                die(mysql_error($conn));
+                die(htmlspecialchars(mysqli_error($conn), ENT_QUOTES));
             }
         }
         return 2;
@@ -3494,7 +3454,7 @@ function login_form($mesg)
         <link rel="stylesheet" href="../configs/styles.css">
     </head>
     <body class="main_body">
-        <?php if($mesg != ""){ ?> <p align="center" style="color:red;"> <?php echo $mesg;?> </p> <?php } ?>
+        <?php if($mesg != ""){ ?> <p align="center" style="color:red;"> <?php echo htmlspecialchars($mesg, ENT_QUOTES);?> </p> <?php } ?>
     <form method="POST" action="?login=1">
     <table class="navtd" align="center" border="1px" style="color:000; width:30%;">
         <tr align="center" class="client_table_head">
