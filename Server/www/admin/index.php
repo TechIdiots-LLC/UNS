@@ -2848,235 +2848,67 @@ function admin_panel($usr, $func, $proto)
         case "view_users":
             if($perms['edit_users'])
             {
-                ?>
-                <table border="1px" width="100%">
-                    <tr class="client_table_head">
-                        <th>Username</th>
-                        <?php
-                        if($LDAP)
-                        {?>
-                        <th>Domain</th><?php
-                        }else{ ?>
-                        <th>Password</th><?php
-                        }
-                        ?><th>Permissions</th><th>Options</th>
-                    </tr>
-                    <?php
-                    if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
-                    # The built-in admin is kept out of the list below because its row has no
-                    # editable permissions and must not be removable. It is still shown, as its
-                    # own row, so the account is not invisible on the page that manages users.
-                    $bia_stmt = $conn->query("SELECT built_in_admin FROM settings");
-                    $bia_row = $bia_stmt ? $bia_stmt->fetch(PDO::FETCH_ASSOC) : false;
-                    $bia_off = !empty($bia_row['built_in_admin']);
-                    ?>
-                    <tr class="client_table_body">
-                        <td align="Center">
-                            <b><?php echo htmlspecialchars($admin_user, ENT_QUOTES);?></b>
-                            <br /><font size="1">built-in admin</font>
-                        </td>
-                        <td align="Center"><font size="1">set at install; use "Reset Admin Password" below</font></td>
-                        <td align="Center">Full access</td>
-                        <td align="Center">
-                            <?php echo $bia_off
-                                ? "<font color='red'>Disabled</font>"
-                                : "<font color='green'>Enabled</font>";?>
-                            <br /><font size="1">use the button below to change</font>
-                        </td>
-                    </tr>
-                    <?php
-                    $au_stmt = $conn->prepare("SELECT * FROM allowed_users WHERE username != ?");
-                    $au_stmt->execute([$admin_user]);
-                    $allowed_users_all = $au_stmt->fetchAll(PDO::FETCH_ASSOC);
-                    if(count($allowed_users_all) > 0)
+                if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
+
+                # The built-in admin is shown as its own row: no editable permissions, and
+                # it must not be removable, but hiding it made the account invisible here.
+                $bia_stmt = $conn->query("SELECT built_in_admin FROM settings");
+                $bia_row  = $bia_stmt ? $bia_stmt->fetch(PDO::FETCH_ASSOC) : false;
+
+                $ad_stmt = $conn->prepare("SELECT id FROM internal_users WHERE username = ?");
+                $ad_stmt->execute([$admin_user]);
+                $admusr = $ad_stmt->fetch(PDO::FETCH_ASSOC);
+
+                # The six permission buttons per user were six near-identical blocks of
+                # form markup. One table drives them all now.
+                $perm_buttons = array(
+                    array('set' => 'urls',          'field' => 'edit_urls',    'label' => 'Edit Clients',     'col' => 'edit_urls'),
+                    array('set' => 'emerg',         'field' => 'edit_emerg',   'label' => 'Edit Emergency',   'col' => 'edit_emerg'),
+                    array('set' => 'user',          'field' => 'edit_user',    'label' => 'Edit Users',       'col' => 'edit_users'),
+                    array('set' => 'c_messages',    'field' => 'c_messages',   'label' => 'Custom Messages',  'col' => 'c_messages'),
+                    array('set' => 'rss_feeds',     'field' => 'rss_feeds',    'label' => 'Rss Feeds',        'col' => 'rss_feeds'),
+                    array('set' => 'edit_options',  'field' => 'edit_options', 'label' => 'UNS Options',      'col' => 'edit_options'),
+                );
+
+                $au_stmt = $conn->prepare("SELECT * FROM allowed_users WHERE username != ?");
+                $au_stmt->execute([$admin_user]);
+                $rows = $au_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $users = array();
+                foreach($rows as $row)
+                {
+                    $int_stmt = $conn->prepare("SELECT id,password FROM internal_users WHERE username = ?");
+                    $int_stmt->execute([$row['username']]);
+                    $int_usr = $int_stmt->fetch(PDO::FETCH_ASSOC);
+
+                    $buttons = array();
+                    foreach($perm_buttons as $pb)
                     {
-                        foreach($allowed_users_all as $array)
-                        {
-                        ?>
-                    <tr class="client_table_body">
-                        <td align="Center">
-                                <?php echo htmlspecialchars($array['username'], ENT_QUOTES);?>
-                        </td>
-                        <?php
-                        $link = db_connect($server, $username, $password, $db, $driver);
-                        $stmt1 = $link->prepare("SELECT id,password FROM internal_users WHERE username = ?");
-                        $stmt1->execute([$array['username']]);
-                        $int_usr = $stmt1->fetch(PDO::FETCH_ASSOC);
-                        if(empty($int_usr['password']))
-                        {?>
-                        <td align="Center">
-                                <?php echo htmlspecialchars($array['domain'], ENT_QUOTES);?>
-                        </td>
-                        <?php
-                        }else
-                        {
-                            ?>
-                        <td align="Center">
-                            <form action="?func=edit_user&set=reset_pwd" method="POST">
-                                <input type="hidden" name="id" value="<?php echo (int)$int_usr['id'];?>"/>
-                                <input type="password" name="password" value=""/>
-                                <input type="submit" value="Reset Password" />
-                            </form>
-                        </td>
-                        <?php
-                        }
-                        ?>
-                        <td width="500px">
-                            <table>
-                                <tr>
-                                    <td align="center">
-                                        <form action="?func=edit_user&set=urls" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
-                                            <input type="hidden" name="edit_urls" value="<?php if($array['edit_urls']){echo "0";}else{echo "1";}?>"/>
-                                            <input type="submit" value="<?php if($array['edit_urls']){echo "Deny";}else{echo "Allow";}?> Edit Clients" />
-                                        </form>
-                                    </td>
-                                    <td align="center">
-                                        <form action="?func=edit_user&set=emerg" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
-                                            <input type="hidden" name="edit_emerg" value="<?php if($array['edit_emerg']){echo "0";}else{echo "1";}?>"/>
-                                            <input type="submit" value="<?php if($array['edit_emerg']){echo "Deny";}else{echo "Allow";}?> Edit Emergency" />
-                                        </form>
-                                    </td>
-                                    <td align="center">
-                                        <form action="?func=edit_user&set=user" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
-                                            <input type="hidden" name="edit_user" value="<?php if($array['edit_users']){echo "0";}else{echo "1";}?>"/>
-                                            <input type="submit" value="<?php if($array['edit_users']){echo "Deny";}else{echo "Allow";}?> Edit Users" />
-                                        </form>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td align="center">
-                                        <form action="?func=edit_user&set=c_messages" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
-                                            <input type="hidden" name="c_messages" value="<?php if($array['c_messages']){echo "0";}else{echo "1";}?>"/>
-                                            <input type="submit" value="<?php if($array['c_messages']){echo "Deny";}else{echo "Allow";}?> Custom Messages" />
-                                        </form>
-                                    </td>
-                                    <td align="center">
-                                        <form action="?func=edit_user&set=rss_feeds" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
-                                            <input type="hidden" name="rss_feeds" value="<?php if($array['rss_feeds']){echo "0";}else{echo "1";}?>"/>
-                                            <input type="submit" value="<?php if($array['rss_feeds']){echo "Deny";}else{echo "Allow";}?> Rss Feeds" />
-                                        </form>
-                                    </td>
-                                    <td align="center">
-                                        <form action="?func=edit_user&set=edit_options" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
-                                            <input type="hidden" name="edit_options" value="<?php if($array['edit_options']){echo "0";}else{echo "1";}?>"/>
-                                            <input type="submit" value="<?php if($array['edit_options']){echo "Deny";}else{echo "Allow";}?> UNS Options" />
-                                        </form>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                        <td align="Center">
-                            <form action="?func=remove_user" method="POST">
-                                <input type="hidden" name="id" value="<?php echo (int)$array['id'];?>"/>
-                                <input type="submit" value="Remove" />
-                            </form>
-                        </td>
-                    </tr>
-                        <?php
-                        }
-                    }else
-                    {
-                        ?>
-                    <tr class="client_table_body">
-                        <td colspan="6" align="center">There are no Users, lets add some</td>
-                    </tr>
-                        <?php
+                        $buttons[] = array(
+                            'set'     => $pb['set'],
+                            'field'   => $pb['field'],
+                            'label'   => $pb['label'],
+                            'allowed' => !empty($row[$pb['col']]),
+                        );
                     }
-                    ?>
-                    <tr class="client_table_tail">
-                        <td colspan="6" align="Center">
-                            <br />
-                            <form name="client_add" action="?func=add_user" method="POST">
-                            <table border="1px">
-                                <tr class="client_table_body">
-                                    <td>
-                                        Username:
-                                    </td>
-                                    <td>
-                                        <input type="text" name="user_N" />
-                                    </td>
-                                </tr>
-                                <?php
-                                if($LDAP)
-                                {
-                                ?>
-                                <tr class="client_table_body">
-                                    <td>
-                                        Domain:
-                                    </td>
-                                    <td>
-                                        <input type="text" name="domain_N" />
-                                    </td>
-                                </tr>
-                                <?php
-                                }else
-                                {
-                                    ?>
-                                <tr class="client_table_body">
-                                    <td>
-                                        Password:
-                                    </td>
-                                    <td>
-                                        <input type="hidden" name="internal_user" value="internal_user" />
-                                        <input name="pwd_N" type="password" />
-                                    </td>
-                                </tr>
-                                <?php
-                                }
-                                ?>
-                                <tr>
-                                    <td colspan="2" align="center" class="client_table_body">
-                                        <input type="submit" value="Add User" />
-                                    </td>
-                                </tr>
-                            </table>
-                            </form>
-                            
-                            <table border="1px">
-                                <tr class="client_table_body">
-                                    <td align="Center">
-                                        <form action="?func=edit_user&set=reset_pwd" method="POST">
-                                            <?php
-                                            if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
-                                            $ad_stmt = $conn->prepare("SELECT id FROM internal_users WHERE username = ?");
-                                            $ad_stmt->execute([$admin_user]);
-                                            $admusr = $ad_stmt->fetch(PDO::FETCH_ASSOC);
-                                            ?>
-                                            <input type="hidden" name="id" value="<?php echo (int)($admusr['id'] ?? 0);?>" />
-                                            <input type="password" name="password" value="" />
-                                            <input type="submit" value="Reset Admin Password" />
-                                        </form>
-                                    </td>
-                                    <td>
-                                        <form action="?func=toggle_builtin" method="POST">
-                                         <?php
-                                        $result = $conn->query("SELECT * FROM settings");
-                                        $array1 = $result->fetch(PDO::FETCH_ASSOC);
-                                        ?>
-                                            <?php
-                                            # built_in_admin is a "disabled" flag: 1 means the
-                                            # built-in account cannot log in. The button used to be
-                                            # labelled from that flag directly, so it read "Enable"
-                                            # while the account was working - and pressing it
-                                            # disabled the account you were logged in as.
-                                            $bia_disabled = !empty($array1['built_in_admin']);
-                                            ?>
-                                            <input type="hidden" name="toggle_admin" value="<?php echo $bia_disabled ? "0" : "1";?>"/>
-                                            <input type="submit" value="<?php echo $bia_disabled ? "Enable" : "Disable";?> Built in Admin" />
-                                        </form>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                </table>
-                <?php
+
+                    $users[] = array(
+                        'id'           => (int)$row['id'],
+                        'username'     => $row['username'],
+                        'domain'       => $row['domain'],
+                        'internal_id'  => (int)($int_usr['id'] ?? 0),
+                        'has_password' => !empty($int_usr['password']),
+                        'perms'        => $buttons,
+                    );
+                }
+
+                $vu = uns_smarty();
+                $vu->assign('ldap', !empty($LDAP));
+                $vu->assign('admin_user', $admin_user);
+                $vu->assign('builtin_off', !empty($bia_row['built_in_admin']));
+                $vu->assign('builtin_id', (int)($admusr['id'] ?? 0));
+                $vu->assign('users', $users);
+                echo $vu->fetch('screens/view_users.tpl');
             }else
             {
                 echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
