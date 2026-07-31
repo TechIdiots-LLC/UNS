@@ -3015,9 +3015,26 @@ function admin_panel($usr, $func, $proto)
             if($perms['edit_users'])
             {
                 $id = (int)filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
-                $stmt = $conn->prepare("SELECT username,domain FROM allowed_users WHERE id = ?");
+                $stmt = $conn->prepare("SELECT username,domain,edit_users FROM allowed_users WHERE id = ?");
                 $stmt->execute([$id]);
                 $array1 = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                # Removing the last account that can administer UNS leaves nobody able to get
+                # back in, so refuse rather than let it happen silently.
+                if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
+                if($array1 && !empty($array1['edit_users'])
+                    && uns_admin_count($conn, $admin_user, !empty($LDAP), $array1['username']) === 0)
+                {
+                    echo "Not removing <b>".htmlspecialchars($array1['username'], ENT_QUOTES)."</b>: it is the only"
+                        ." account that can log in and manage users, so removing it would lock you out.";
+                    ?>
+            <script>
+                setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",4000);
+            </script>
+                    <?php
+                    break;
+                }
+
                 $del_stmt = $conn->prepare("DELETE FROM allowed_users WHERE id = ?");
                 if($del_stmt->execute([$id]))
                 {
@@ -3067,16 +3084,11 @@ function admin_panel($usr, $func, $proto)
                 if($toggle_admin)
                 {
                     if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
-                    $others = 0;
-                    $o_stmt = $conn->prepare(
-                        "SELECT COUNT(*) FROM allowed_users a
-                         INNER JOIN internal_users i ON i.username = a.username
-                         WHERE a.username != ? AND i.disabled = 0");
-                    if($o_stmt->execute([$admin_user])){$others = (int)$o_stmt->fetchColumn();}
-                    if(!$LDAP && $others === 0)
+                    if(uns_admin_count($conn, $admin_user, !empty($LDAP), $admin_user) === 0)
                     {
-                        echo "Not disabling the built-in admin: no other account can log in yet, so this would lock you out."
-                            ." Add an internal user (and check they can sign in) or enable LDAP first.";
+                        echo "Not disabling the built-in admin: it is the only account that can log in and manage users,"
+                            ." so this would lock you out. Add another user, grant them <b>Edit Users</b>, check they can"
+                            ." sign in, then disable this account.";
                         ?>
             <script>
                 setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",4000);
@@ -3175,6 +3187,28 @@ function admin_panel($usr, $func, $proto)
                 {
                     list($post_field, $column, $label) = $toggle_fields[$set];
                     $value = (int)filter_input(INPUT_POST, $post_field, FILTER_SANITIZE_SPECIAL_CHARS);
+
+                    # Revoking Edit Users from the last remaining administrator leaves nobody
+                    # able to grant it back, so treat it the same as removing them.
+                    if($column === 'edit_users' && !$value)
+                    {
+                        if(!isset($admin_user) || $admin_user === ''){$admin_user = 'unsadmin';}
+                        $tgt_stmt = $conn->prepare("SELECT username FROM allowed_users WHERE id = ?");
+                        $tgt_stmt->execute([$id]);
+                        $tgt = $tgt_stmt->fetch(PDO::FETCH_ASSOC);
+                        if($tgt && uns_admin_count($conn, $admin_user, !empty($LDAP), $tgt['username']) === 0)
+                        {
+                            echo "Not removing <b>Edit Users</b> from <b>".htmlspecialchars($tgt['username'], ENT_QUOTES)."</b>:"
+                                ." it is the only account that can log in and manage users, so nobody could grant it back.";
+                            ?>
+                    <script>
+                        setTimeout("location.href = '<?php echo $admin_url;?>admin/index.php?func=view_users'",4000);
+                    </script>
+                            <?php
+                            break;
+                        }
+                    }
+
                     $stmt = $conn->prepare("UPDATE allowed_users SET $column = ? WHERE id = ?");
                     if($stmt->execute([$value, $id]))
                     {
@@ -3442,6 +3476,44 @@ function format_bytes($size) {
     $units = array(' B', ' KB', ' MB', ' GB', ' TB');
     for ($i = 0; $size >= 1024 && $i < 4; $i++) $size /= 1024;
     return round($size, 2).$units[$i];
+}
+
+# Counts accounts that can BOTH log in and manage users, optionally ignoring one of them.
+#
+# Used to stop the last administrator being disabled, removed or demoted - any of which
+# leaves nobody able to administer UNS, with no way back in short of editing the database
+# by hand. "Can log in" is deliberately strict: an account listed in allowed_users is not
+# enough on its own, it also needs a way to authenticate.
+function uns_admin_count($conn, $admin_user, $ldap_on, $exclude_username = null)
+{
+    $stmt = $conn->query("SELECT built_in_admin FROM settings");
+    $row  = $stmt ? $stmt->fetch(PDO::FETCH_ASSOC) : false;
+    $builtin_enabled = empty($row['built_in_admin']);
+
+    $res = $conn->query(
+        "SELECT a.username, a.domain, i.username AS int_username, i.disabled AS int_disabled
+         FROM allowed_users a
+         LEFT JOIN internal_users i ON i.username = a.username
+         WHERE a.edit_users = 1");
+    if(!$res){return 0;}
+
+    $count = 0;
+    while($r = $res->fetch(PDO::FETCH_ASSOC))
+    {
+        if($exclude_username !== null && $r['username'] === $exclude_username){continue;}
+
+        if($r['username'] === $admin_user)
+        {
+            # The built-in account additionally has its own on/off switch.
+            if($builtin_enabled){$count++;}
+            continue;
+        }
+        # An internal account can log in when it has an enabled internal_users row.
+        if(!empty($r['int_username']) && empty($r['int_disabled'])){$count++; continue;}
+        # An LDAP account can only log in while LDAP is switched on.
+        if($ldap_on && ($r['domain'] ?? '') !== ''){$count++;}
+    }
+    return $count;
 }
 
 function create_cookie($username_login)
