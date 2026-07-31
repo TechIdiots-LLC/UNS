@@ -268,21 +268,33 @@ function uns_smarty()
     # problem on the server rather than anything the page itself did wrong.
     $compile_dir = uns_data_dir('templates_c', true);
     $cache_dir   = uns_data_dir('templates_cache', true);
-    foreach(array('compiled templates' => $compile_dir, 'template cache' => $cache_dir) as $what => $dir)
+
+    # Collect every unusable folder before reporting. Failing on the first one means
+    # fixing it, reloading, and being told about the next - which is exactly what
+    # happens with these two, since Smarty only touches the cache folder after the
+    # compile folder is working.
+    $bad = array();
+    foreach(array($compile_dir, $cache_dir) as $dir)
     {
-        if(is_dir($dir) && is_writable($dir)){continue;}
+        if(!is_dir($dir) || !is_writable($dir)){$bad[] = $dir;}
+    }
+    if($bad)
+    {
         $user = function_exists('posix_geteuid') && function_exists('posix_getpwuid')
             ? (posix_getpwuid(posix_geteuid())['name'] ?? 'the web server user')
             : 'the web server user';
-        $shown = htmlspecialchars($dir, ENT_QUOTES);
-        die("<h3>UNS cannot write its ".$what."</h3>"
-            ."<p>PHP is running as <b>".htmlspecialchars($user, ENT_QUOTES)."</b> and needs to write to"
-            ." <b>".$shown."</b>"
-            .(is_dir($dir) ? ", which exists but is not writable." : ", which could not be created.")
-            ."</p><p>On a typical Linux server:</p>"
-            ."<pre>sudo mkdir -p '".$shown."'\n"
-            ."sudo chown -R ".htmlspecialchars($user, ENT_QUOTES)." '".$shown."'\n"
-            ."sudo chmod 750 '".$shown."'</pre>");
+        $user_esc = htmlspecialchars($user, ENT_QUOTES);
+        $msg = "<h3>UNS cannot write its template folder".(count($bad) === 1 ? "" : "s")."</h3>"
+            ."<p>Smarty compiles templates on every page. PHP is running as <b>".$user_esc."</b>"
+            ." and needs to write to the following, so run all of it in one go:</p><pre>";
+        foreach($bad as $dir)
+        {
+            $shown = htmlspecialchars($dir, ENT_QUOTES);
+            $msg .= "sudo mkdir -p '".$shown."'\n"
+                 ."sudo chown -R ".$user_esc." '".$shown."'\n"
+                 ."sudo chmod 750 '".$shown."'\n";
+        }
+        die($msg."</pre>");
     }
 
     $smarty->setCompileDir($compile_dir);
