@@ -393,6 +393,9 @@ function admin_panel($usr, $func, $proto)
     # near-identical if/else blocks that concatenated the same HTML by hand.
     $menu = array(
         array('perm' => 'edit_urls',    'label' => 'Edit Clients',       'href' => '?',                  'text' => 'List Clients'),
+        # Groups configure client URL lists, so they ride on the same permission
+        # rather than adding a seventh column to allowed_users.
+        array('perm' => 'edit_urls',    'label' => '',                   'href' => '?func=client_groups','text' => 'Client Groups'),
         array('perm' => 'edit_emerg',   'label' => 'Emergency Messages', 'href' => '?func=edit_emerg',   'text' => 'Emergency Messages'),
         array('perm' => 'edit_users',   'label' => 'Edit Users',         'href' => '?func=view_users',   'text' => 'User Permissions'),
         array('perm' => 'c_messages',   'label' => 'Custom Messages',    'href' => '?func=c_messages',   'text' => 'Custom Messages'),
@@ -405,7 +408,9 @@ function admin_panel($usr, $func, $proto)
     foreach($menu as $item)
     {
         $allowed = !empty($perms[$item['perm']]);
-        $nav_items[] = array('label' => $item['label'], 'allowed' => $allowed);
+        # An empty label means the entry only contributes a side-bar link - it shares a
+        # permission that is already named in the bar across the top.
+        if($item['label'] !== ''){$nav_items[] = array('label' => $item['label'], 'allowed' => $allowed);}
         if($allowed){$side_links[] = array('href' => $item['href'], 'text' => $item['text']);}
     }
 
@@ -2063,6 +2068,327 @@ function admin_panel($usr, $func, $proto)
                 echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
             }
             break;
+        case "client_groups":
+            if($perms['edit_urls'])
+            {
+                uns_groups_ensure($conn, $driver);
+
+                $groups = array();
+                $g_stmt = $conn->query("SELECT * FROM client_groups ORDER BY priority DESC, name ASC");
+                if($g_stmt)
+                {
+                    while($row = $g_stmt->fetch(PDO::FETCH_ASSOC))
+                    {
+                        $m_stmt = $conn->prepare("SELECT COUNT(*) FROM client_group_members WHERE group_id = ?");
+                        $m_stmt->execute([$row['id']]);
+                        $l_stmt = $conn->prepare("SELECT COUNT(*) FROM group_links WHERE group_id = ?");
+                        $l_stmt->execute([$row['id']]);
+
+                        $groups[] = array(
+                            'id'       => (int)$row['id'],
+                            'name'     => $row['name'],
+                            'mode'     => $row['mode'],
+                            'priority' => (int)$row['priority'],
+                            'active'   => !empty($row['active']),
+                            'members'  => (int)$m_stmt->fetchColumn(),
+                            'urls'     => (int)$l_stmt->fetchColumn(),
+                        );
+                    }
+                }
+
+                $cg = uns_smarty();
+                $cg->assign('groups', $groups);
+                echo $cg->fetch('screens/client_groups.tpl');
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
+        case "add_group":
+            if($perms['edit_urls'])
+            {
+                uns_groups_ensure($conn, $driver);
+                $g_name = trim((string)filter_input(INPUT_POST, 'name', FILTER_SANITIZE_SPECIAL_CHARS));
+                if($g_name === '')
+                {
+                    echo "A group needs a name.";
+                    uns_redirect('func=client_groups', 3000);
+                    break;
+                }
+                $stmt = $conn->prepare("INSERT INTO client_groups (name, description, mode, priority, active) VALUES (?, '', 'add', 0, 1)");
+                if($stmt && $stmt->execute([$g_name]))
+                {
+                    echo "Added group [".htmlspecialchars($g_name, ENT_QUOTES)."]";
+                    uns_redirect('func=client_groups', $page_timeout);
+                }else
+                {
+                    echo "Failed to add group.<br />Probably a duplicate name, check the SQL error below<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
+                }
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
+        case "remove_group":
+            if($perms['edit_urls'])
+            {
+                uns_groups_ensure($conn, $driver);
+                if(!@$_POST['remove'])
+                {
+                    uns_redirect('func=client_groups', $page_timeout);
+                    break;
+                }
+                foreach($_POST['remove'] as $gid)
+                {
+                    $gid = (int)$gid;
+                    # Membership and the group's URLs go with it; nothing else references a group.
+                    $conn->prepare("DELETE FROM client_group_members WHERE group_id = ?")->execute([$gid]);
+                    $conn->prepare("DELETE FROM group_links WHERE group_id = ?")->execute([$gid]);
+                    $stmt = $conn->prepare("DELETE FROM client_groups WHERE id = ?");
+                    if($stmt && $stmt->execute([$gid]))
+                    {
+                        echo "Removed group [".$gid."]<br />\r\n";
+                    }else
+                    {
+                        echo "Failed to remove group [".$gid."]<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
+                    }
+                }
+                uns_redirect('func=client_groups', $page_timeout);
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
+        case "edit_group":
+            if($perms['edit_urls'])
+            {
+                uns_groups_ensure($conn, $driver);
+                $gid   = (int)filter_input(INPUT_GET, 'group', FILTER_SANITIZE_SPECIAL_CHARS);
+                $stmt  = $conn->prepare("SELECT * FROM client_groups WHERE id = ?");
+                $stmt->execute([$gid]);
+                $group = $stmt->fetch(PDO::FETCH_ASSOC);
+                if(!$group)
+                {
+                    echo "No such group.";
+                    uns_redirect('func=client_groups', 3000);
+                    break;
+                }
+
+                # Which clients are in it. Friendly names come from the friendly table, the
+                # same join the client list screen uses.
+                $members = array();
+                $m_stmt  = $conn->prepare("SELECT client FROM client_group_members WHERE group_id = ?");
+                $m_stmt->execute([$gid]);
+                while($row = $m_stmt->fetch(PDO::FETCH_ASSOC)){$members[$row['client']] = true;}
+
+                $clients = array();
+                $c_stmt  = $conn->query("SELECT friendly.friendly, friendly.client FROM allowed_clients, friendly"
+                    ." WHERE friendly.client = allowed_clients.client_name ORDER BY friendly.friendly ASC");
+                if($c_stmt)
+                {
+                    while($row = $c_stmt->fetch(PDO::FETCH_ASSOC))
+                    {
+                        $clients[] = array(
+                            'client'   => $row['client'],
+                            'friendly' => $row['friendly'],
+                            'member'   => isset($members[$row['client']]),
+                        );
+                    }
+                }
+
+                $urls   = array();
+                $u_stmt = $conn->prepare("SELECT * FROM group_links WHERE group_id = ? ORDER BY id ASC");
+                $u_stmt->execute([$gid]);
+                while($row = $u_stmt->fetch(PDO::FETCH_ASSOC))
+                {
+                    $urls[] = array(
+                        'id'      => (int)$row['id'],
+                        'url'     => $row['url'],
+                        'label'   => uns_url_label($conn, $host, $row['url']),
+                        'refresh' => (int)$row['refresh'],
+                        'enabled' => empty($row['disabled']),
+                    );
+                }
+
+                $eg = uns_smarty();
+                $eg->assign('group',   array(
+                    'id'          => (int)$group['id'],
+                    'name'        => $group['name'],
+                    'description' => $group['description'],
+                    'mode'        => $group['mode'],
+                    'priority'    => (int)$group['priority'],
+                    'active'      => !empty($group['active']),
+                ));
+                $eg->assign('clients', $clients);
+                $eg->assign('urls',    $urls);
+                $eg->assign('refresh', (int)$refresh);
+                echo $eg->fetch('screens/edit_group.tpl');
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
+        case "save_group":
+            if($perms['edit_urls'])
+            {
+                uns_groups_ensure($conn, $driver);
+                $gid      = (int)filter_input(INPUT_GET, 'group', FILTER_SANITIZE_SPECIAL_CHARS);
+                $g_name   = trim((string)filter_input(INPUT_POST, 'name', FILTER_SANITIZE_SPECIAL_CHARS));
+                $g_desc   = trim((string)filter_input(INPUT_POST, 'description', FILTER_SANITIZE_SPECIAL_CHARS));
+                $g_mode   = filter_input(INPUT_POST, 'mode', FILTER_SANITIZE_SPECIAL_CHARS);
+                $g_prio   = (int)filter_input(INPUT_POST, 'priority', FILTER_SANITIZE_ENCODED);
+                $g_active = filter_input(INPUT_POST, 'active', FILTER_SANITIZE_ENCODED) ? 1 : 0;
+                if(!in_array($g_mode, array('add', 'replace'), true)){$g_mode = 'add';}
+                if($g_name === '')
+                {
+                    echo "A group needs a name.";
+                    uns_redirect('func=edit_group&group='.$gid, 3000);
+                    break;
+                }
+                $stmt = $conn->prepare("UPDATE client_groups SET name = ?, description = ?, mode = ?, priority = ?, active = ? WHERE id = ?");
+                if($stmt && $stmt->execute([$g_name, $g_desc, $g_mode, $g_prio, $g_active, $gid]))
+                {
+                    echo "Saved group settings.";
+                    uns_redirect('func=edit_group&group='.$gid, $page_timeout);
+                }else
+                {
+                    echo "Failed to save group.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
+                }
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
+        case "save_group_members":
+            if($perms['edit_urls'])
+            {
+                uns_groups_ensure($conn, $driver);
+                $gid = (int)filter_input(INPUT_GET, 'group', FILTER_SANITIZE_SPECIAL_CHARS);
+
+                # The posted set is the membership. Each checkbox carries the client name as
+                # its value rather than relying on position, so the usual unticked-checkbox
+                # packing problem cannot misalign anything - an absent name simply means
+                # "not a member".
+                $wanted = array();
+                if(!empty($_POST['clients']) && is_array($_POST['clients']))
+                {
+                    foreach($_POST['clients'] as $c)
+                    {
+                        if(is_safe_client_id($c)){$wanted[$c] = true;}
+                    }
+                }
+
+                # Only accept clients that actually exist, so a hand-crafted POST can't
+                # create membership rows for a client that was never registered.
+                $valid = array();
+                $c_stmt = $conn->query("SELECT client_name FROM allowed_clients");
+                if($c_stmt)
+                {
+                    while($row = $c_stmt->fetch(PDO::FETCH_ASSOC))
+                    {
+                        if(isset($wanted[$row['client_name']])){$valid[] = $row['client_name'];}
+                    }
+                }
+
+                $conn->prepare("DELETE FROM client_group_members WHERE group_id = ?")->execute([$gid]);
+                $ins = $conn->prepare("INSERT INTO client_group_members (group_id, client) VALUES (?, ?)");
+                $added = 0;
+                foreach($valid as $c)
+                {
+                    if($ins && $ins->execute([$gid, $c])){$added++;}
+                }
+                echo "Group now has ".$added." client".($added == 1 ? "" : "s").".";
+                uns_redirect('func=edit_group&group='.$gid, $page_timeout);
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
+        case "add_group_url":
+            if($perms['edit_urls'])
+            {
+                uns_groups_ensure($conn, $driver);
+                $gid   = (int)filter_input(INPUT_GET, 'group', FILTER_SANITIZE_SPECIAL_CHARS);
+                $g_url = trim((string)filter_input(INPUT_POST, 'url', FILTER_SANITIZE_SPECIAL_CHARS));
+                $g_ref = (int)filter_input(INPUT_POST, 'refresh', FILTER_SANITIZE_ENCODED);
+                if($g_ref < 1){$g_ref = (int)$refresh;}
+                if($g_url === '' || $g_url === 'http://')
+                {
+                    echo "No URL given.";
+                    uns_redirect('func=edit_group&group='.$gid, 3000);
+                    break;
+                }
+                $stmt = $conn->prepare("INSERT INTO group_links (group_id, url, disabled, refresh) VALUES (?, ?, 0, ?)");
+                if($stmt && $stmt->execute([$gid, $g_url, $g_ref]))
+                {
+                    echo "Added URL to group.";
+                    uns_redirect('func=edit_group&group='.$gid, $page_timeout);
+                }else
+                {
+                    echo "Failed to add URL.<br />Probably already in this group, check the SQL error below<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
+                }
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
+        case "update_group_urls":
+            if($perms['edit_urls'])
+            {
+                uns_groups_ensure($conn, $driver);
+                $gid = (int)filter_input(INPUT_GET, 'group', FILTER_SANITIZE_SPECIAL_CHARS);
+
+                # Removing takes precedence over the refresh/enable edits in the same form.
+                if(@$_POST['remove'] && !empty($_POST['urls']) && is_array($_POST['urls']))
+                {
+                    $del = $conn->prepare("DELETE FROM group_links WHERE id = ? AND group_id = ?");
+                    foreach($_POST['urls'] as $uid)
+                    {
+                        if($del){$del->execute([(int)$uid, $gid]);}
+                    }
+                    echo "Removed the selected URLs.";
+                    uns_redirect('func=edit_group&group='.$gid, $page_timeout);
+                    break;
+                }
+
+                # url_id[] and refresh_t[] are hidden/text inputs, always submitted, so they
+                # stay index-aligned. The enable toggles are checkboxes and cannot be, so
+                # each one carries its own row id as its value instead.
+                $toggled = array();
+                if(!empty($_POST['urls']) && is_array($_POST['urls']))
+                {
+                    foreach($_POST['urls'] as $uid){$toggled[(int)$uid] = true;}
+                }
+
+                $ids  = isset($_POST['url_id'])    && is_array($_POST['url_id'])    ? $_POST['url_id']    : array();
+                $refs = isset($_POST['refresh_t']) && is_array($_POST['refresh_t']) ? $_POST['refresh_t'] : array();
+
+                $upd = $conn->prepare("UPDATE group_links SET refresh = ?, disabled = ? WHERE id = ? AND group_id = ?");
+                $cur = $conn->prepare("SELECT disabled FROM group_links WHERE id = ? AND group_id = ?");
+                $n   = 0;
+                foreach($ids as $i => $uid)
+                {
+                    $uid = (int)$uid;
+                    $ref = isset($refs[$i]) ? (int)$refs[$i] : 0;
+                    if($ref < 1){$ref = (int)$refresh;}
+
+                    if(!$cur || !$cur->execute([$uid, $gid])){continue;}
+                    $row = $cur->fetch(PDO::FETCH_ASSOC);
+                    if(!$row){continue;}
+
+                    # A ticked box flips this row's enabled state; an unticked one leaves it.
+                    $disabled = !empty($row['disabled']) ? 1 : 0;
+                    if(isset($toggled[$uid])){$disabled = $disabled ? 0 : 1;}
+
+                    if($upd && $upd->execute([$ref, $disabled, $uid, $gid])){$n++;}
+                }
+                echo "Updated ".$n." URL".($n == 1 ? "" : "s").".";
+                uns_redirect('func=edit_group&group='.$gid, $page_timeout);
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
         case "remove_cl":
             if($perms['edit_urls'])
             {
@@ -2085,6 +2411,10 @@ function admin_panel($usr, $func, $proto)
                         $stmt2 = $conn->prepare("DELETE FROM friendly WHERE client = ?");
                         if($stmt2->execute([$id]))
                         {
+                            # Membership is keyed by client name, so leaving these rows behind
+                            # would silently re-attach the old groups to any later client
+                            # registered under the same name.
+                            uns_groups_forget_client($conn, $driver, $id);
                             # $id is whitelisted by is_safe_client_id() above, safe as a table name here.
                             if($conn->query("DROP TABLE ".$id."_links"))
                             {

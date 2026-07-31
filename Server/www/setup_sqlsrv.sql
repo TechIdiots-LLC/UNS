@@ -115,3 +115,31 @@ CREATE TABLE uns_config (
   cfg_key VARCHAR(64) NOT NULL PRIMARY KEY,
   cfg_value NVARCHAR(MAX) NOT NULL
 );
+
+-- Client groups, see setup_mysql.sql for notes.
+IF OBJECT_ID('client_groups', 'U') IS NULL
+CREATE TABLE client_groups (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL UNIQUE,
+  description NVARCHAR(MAX) NOT NULL DEFAULT '',
+  mode VARCHAR(8) NOT NULL DEFAULT 'add',
+  priority INT NOT NULL DEFAULT 0,
+  active TINYINT NOT NULL DEFAULT 1
+);
+
+IF OBJECT_ID('client_group_members', 'U') IS NULL
+CREATE TABLE client_group_members (
+  group_id INT NOT NULL,
+  client VARCHAR(255) NOT NULL,
+  PRIMARY KEY (group_id, client)
+);
+
+IF OBJECT_ID('group_links', 'U') IS NULL
+CREATE TABLE group_links (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  group_id INT NOT NULL,
+  url VARCHAR(255) NOT NULL,
+  disabled TINYINT NOT NULL DEFAULT 0,
+  refresh INT NOT NULL DEFAULT 60,
+  CONSTRAINT group_url UNIQUE (group_id, url)
+);

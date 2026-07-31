@@ -191,3 +191,51 @@ CREATE TABLE IF NOT EXISTS `uns_config` (
   `cfg_value` text NOT NULL,
   PRIMARY KEY (`cfg_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+-- --------------------------------------------------------
+
+--
+-- Client groups
+--
+-- A group is a named collection of clients with its own URL list. Membership is
+-- many-to-many: a screen can belong to several groups at once (a building, and a
+-- role such as "outdoor"), which is what makes targeted alerting possible later.
+--
+-- Members are keyed by client_name rather than allowed_clients.id, because every
+-- other table that refers to a client (friendly, connections, archive_links, and
+-- the per-client "<client>_links" table) does the same.
+--
+-- mode controls how a group's list combines with the member's own list:
+--   add     - the group's URLs join the client's normal rotation
+--   replace - while active, members show only this group's URLs
+-- priority breaks the tie when a client is in more than one active replace group;
+-- the highest wins.
+--
+
+CREATE TABLE IF NOT EXISTS `client_groups` (
+  `id` int(255) NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) NOT NULL,
+  `description` text NOT NULL,
+  `mode` varchar(8) NOT NULL DEFAULT 'add',
+  `priority` int(11) NOT NULL DEFAULT '0',
+  `active` tinyint(4) NOT NULL DEFAULT '1',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 AUTO_INCREMENT=0;
+
+CREATE TABLE IF NOT EXISTS `client_group_members` (
+  `group_id` int(255) NOT NULL,
+  `client` varchar(255) NOT NULL,
+  PRIMARY KEY (`group_id`, `client`),
+  KEY `client` (`client`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+CREATE TABLE IF NOT EXISTS `group_links` (
+  `id` int(255) NOT NULL AUTO_INCREMENT,
+  `group_id` int(255) NOT NULL,
+  `url` varchar(255) NOT NULL,
+  `disabled` tinyint(4) NOT NULL DEFAULT '0',
+  `refresh` int(5) NOT NULL DEFAULT '60',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `group_url` (`group_id`, `url`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 AUTO_INCREMENT=0;

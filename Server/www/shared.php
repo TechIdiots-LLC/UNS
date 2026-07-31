@@ -408,6 +408,214 @@ function uns_config_set($conn, $driver, $key, $value)
     return $ins ? $ins->execute(array($key, (string)$value)) : false;
 }
 
+# --- Client groups ----------------------------------------------------------
+#
+# A group is a named collection of clients with its own URL list. Membership is
+# many-to-many, so one screen can sit in several groups at once.
+#
+# Created on demand like uns_config, so installs predating groups pick the tables
+# up with no upgrade step.
+
+function db_create_group_tables($conn, $driver)
+{
+    switch($driver)
+    {
+        case 'sqlite':
+            $sql = array(
+                "CREATE TABLE IF NOT EXISTS client_groups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(255) NOT NULL UNIQUE,
+                    description TEXT NOT NULL DEFAULT '',
+                    mode VARCHAR(8) NOT NULL DEFAULT 'add',
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    active TINYINT NOT NULL DEFAULT 1
+                )",
+                "CREATE TABLE IF NOT EXISTS client_group_members (
+                    group_id INTEGER NOT NULL,
+                    client VARCHAR(255) NOT NULL,
+                    PRIMARY KEY (group_id, client)
+                )",
+                "CREATE TABLE IF NOT EXISTS group_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id INTEGER NOT NULL,
+                    url VARCHAR(255) NOT NULL,
+                    disabled TINYINT NOT NULL DEFAULT 0,
+                    refresh INTEGER NOT NULL DEFAULT 60,
+                    UNIQUE (group_id, url)
+                )",
+            );
+            break;
+        case 'sqlsrv':
+            $sql = array(
+                "IF OBJECT_ID('client_groups', 'U') IS NULL
+                CREATE TABLE client_groups (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL UNIQUE,
+                    description NVARCHAR(MAX) NOT NULL DEFAULT '',
+                    mode VARCHAR(8) NOT NULL DEFAULT 'add',
+                    priority INT NOT NULL DEFAULT 0,
+                    active TINYINT NOT NULL DEFAULT 1
+                )",
+                "IF OBJECT_ID('client_group_members', 'U') IS NULL
+                CREATE TABLE client_group_members (
+                    group_id INT NOT NULL,
+                    client VARCHAR(255) NOT NULL,
+                    PRIMARY KEY (group_id, client)
+                )",
+                "IF OBJECT_ID('group_links', 'U') IS NULL
+                CREATE TABLE group_links (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    group_id INT NOT NULL,
+                    url VARCHAR(255) NOT NULL,
+                    disabled TINYINT NOT NULL DEFAULT 0,
+                    refresh INT NOT NULL DEFAULT 60,
+                    CONSTRAINT group_url UNIQUE (group_id, url)
+                )",
+            );
+            break;
+        case 'mysql':
+        default:
+            $sql = array(
+                "CREATE TABLE IF NOT EXISTS client_groups (
+                    id int(255) NOT NULL AUTO_INCREMENT,
+                    name varchar(255) NOT NULL,
+                    description text NOT NULL,
+                    mode varchar(8) NOT NULL DEFAULT 'add',
+                    priority int(11) NOT NULL DEFAULT '0',
+                    active tinyint(4) NOT NULL DEFAULT '1',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY name (name)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8",
+                "CREATE TABLE IF NOT EXISTS client_group_members (
+                    group_id int(255) NOT NULL,
+                    client varchar(255) NOT NULL,
+                    PRIMARY KEY (group_id, client),
+                    KEY client (client)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8",
+                "CREATE TABLE IF NOT EXISTS group_links (
+                    id int(255) NOT NULL AUTO_INCREMENT,
+                    group_id int(255) NOT NULL,
+                    url varchar(255) NOT NULL,
+                    disabled tinyint(4) NOT NULL DEFAULT '0',
+                    refresh int(5) NOT NULL DEFAULT '60',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY group_url (group_id, url)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8",
+            );
+            break;
+    }
+    $ok = true;
+    foreach($sql as $q){if($conn->exec($q) === false){$ok = false;}}
+    return $ok;
+}
+
+# Runs the create-on-demand once per request. Called by the admin screens, which are
+# about to write and so need the tables to exist up front.
+function uns_groups_ensure($conn, $driver)
+{
+    static $ensured = false;
+    if(!$ensured){db_create_group_tables($conn, $driver); $ensured = true;}
+}
+
+# Reads from the group tables, creating them and retrying once if they aren't there.
+#
+# The client page runs this on every hit, so it must not issue DDL just to guarantee
+# the tables exist: that would mean three CREATE TABLE IF NOT EXISTS per screen per
+# refresh, and would require the runtime database user to hold DDL rights forever.
+# Reading first keeps the steady state at one SELECT, and an install upgrading from a
+# pre-groups database still self-heals on its first request.
+function uns_groups_select($conn, $driver, $sql, $params = array())
+{
+    static $created = false;
+
+    $stmt = $conn->prepare($sql);
+    if($stmt && $stmt->execute($params)){return $stmt;}
+    if($created){return false;}
+
+    $created = true;
+    db_create_group_tables($conn, $driver);
+
+    $stmt = $conn->prepare($sql);
+    if($stmt && $stmt->execute($params)){return $stmt;}
+    return false;
+}
+
+# Every group a client belongs to, most important first. Used by both the client
+# page (to resolve its URL list) and the admin screens (to show membership).
+function uns_client_groups($conn, $driver, $client)
+{
+    $out  = array();
+    $stmt = uns_groups_select($conn, $driver,
+        "SELECT g.id, g.name, g.mode, g.priority, g.active
+           FROM client_groups g, client_group_members m
+          WHERE m.group_id = g.id AND m.client = ?
+       ORDER BY g.priority DESC, g.id ASC", array($client));
+    if(!$stmt){return $out;}
+    while($row = $stmt->fetch(PDO::FETCH_ASSOC)){$out[] = $row;}
+    return $out;
+}
+
+# The enabled URLs belonging to one group, as [[url, refresh], ...].
+function uns_group_links($conn, $driver, $group_id)
+{
+    $out  = array();
+    $stmt = uns_groups_select($conn, $driver,
+        "SELECT url, refresh FROM group_links WHERE group_id = ? AND disabled != '1'",
+        array((int)$group_id));
+    if(!$stmt){return $out;}
+    while($row = $stmt->fetch(PDO::FETCH_ASSOC)){$out[] = array($row['url'], $row['refresh']);}
+    return $out;
+}
+
+# Resolves what a client should actually rotate through, as [[url, refresh], ...].
+#
+# $own is the client's own list, already read from its "<client>_links" table.
+# A group in 'replace' mode takes the screen over entirely while it is active, so
+# the highest-priority active replace group wins outright and nothing else is
+# mixed in. Otherwise every active 'add' group contributes its URLs alongside the
+# client's own. A replace group with no usable URLs is ignored rather than
+# blanking the screen.
+function uns_resolve_client_urls($conn, $driver, $client, $own)
+{
+    $groups = uns_client_groups($conn, $driver, $client);
+    if(!$groups){return $own;}
+
+    $extra = array();
+    foreach($groups as $g)
+    {
+        if(empty($g['active'])){continue;}
+        $links = uns_group_links($conn, $driver, $g['id']);
+        if(!$links){continue;}
+
+        # uns_client_groups() orders by priority, so the first replace group that
+        # actually has URLs is the winner.
+        if($g['mode'] === 'replace'){return $links;}
+        foreach($links as $l){$extra[] = $l;}
+    }
+
+    # De-duplicate by URL: a client can be in two groups carrying the same page, and
+    # array_rand() would otherwise weight it double in the rotation.
+    $seen = array();
+    $out  = array();
+    foreach(array_merge($own, $extra) as $l)
+    {
+        if(isset($seen[$l[0]])){continue;}
+        $seen[$l[0]] = true;
+        $out[] = $l;
+    }
+    return $out;
+}
+
+# Drops a client out of every group. Called when the client itself is removed, so
+# membership rows cannot outlive the client and silently re-attach to a later
+# client that happens to reuse the name.
+function uns_groups_forget_client($conn, $driver, $client)
+{
+    uns_groups_ensure($conn, $driver);
+    $stmt = $conn->prepare("DELETE FROM client_group_members WHERE client = ?");
+    return $stmt ? $stmt->execute(array($client)) : false;
+}
+
 # ----------------------------------------------------------------------------
 
 # Reads the app version from the VERSION file, so the version only needs updating in one

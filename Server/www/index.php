@@ -253,34 +253,40 @@ function get_client_url($client)
     $emerg_fl = $array['emerg'];
     if(!$emerg_fl)
     {
-        $stmt = $conn->prepare("SELECT * FROM connections where client = ? ORDER by last_conn DESC");
-        $stmt->execute([$client]);
-        $prev = $stmt->fetch(PDO::FETCH_ASSOC);
-        if($prev)
+        # The client's own list. $client is whitelisted to [A-Za-z0-9_]+ above, so it's
+        # safe to use as a table name here.
+        $own = array();
+        $stmt = $conn->query("SELECT url, refresh FROM ".$client."_links where disabled != '1'");
+        if($stmt)
         {
-            $prev_url = $prev['last_url'];
-            # $client is whitelisted to [A-Za-z0-9_]+ above, so it's safe to use as a table name here.
-            $stmt = $conn->prepare("SELECT * FROM ".$client."_links where disabled != '1' AND url != ?");
-            $stmt->execute([$prev_url]);
             while($array = $stmt->fetch(PDO::FETCH_ASSOC))
             {
-                $ret[] = array($array['url'], $array['refresh']);
+                $own[] = array($array['url'], $array['refresh']);
             }
+        }
 
-            if(empty($ret[0]))
-            {
-                $stmt = $conn->query("SELECT * FROM ".$client."_links where disabled != '1'");
-                while($array = $stmt->fetch(PDO::FETCH_ASSOC))
-                {
-                    $ret[] = array($array['url'], $array['refresh']);
-                }
-            }
-        }else
+        # Any groups this client belongs to can add to that list, or replace it.
+        $ret = uns_resolve_client_urls($conn, $driver, $client, $own);
+
+        # Don't serve the same URL twice running, so a rotation actually rotates.
+        #
+        # This used to be an "AND url != ?" on the query above, which now would only
+        # cover the client's own table - a group URL could repeat forever. Filtering
+        # the resolved list here covers group URLs too. If filtering empties the list
+        # (a client with exactly one URL) the unfiltered list stands, which is what
+        # the old fall-back query did.
+        $stmt = $conn->prepare("SELECT last_url FROM connections where client = ? ORDER by last_conn DESC");
+        if($stmt && $stmt->execute([$client]))
         {
-            $stmt = $conn->query("SELECT * FROM ".$client."_links where disabled != '1'");
-            while($array = $stmt->fetch(PDO::FETCH_ASSOC))
+            $prev = $stmt->fetch(PDO::FETCH_ASSOC);
+            if($prev)
             {
-                $ret[] = array($array['url'], $array['refresh']);
+                $filtered = array();
+                foreach($ret as $link)
+                {
+                    if($link[0] !== $prev['last_url']){$filtered[] = $link;}
+                }
+                if(!empty($filtered)){$ret = $filtered;}
             }
         }
 

@@ -102,3 +102,28 @@ CREATE TABLE IF NOT EXISTS uns_config (
   cfg_key VARCHAR(64) NOT NULL PRIMARY KEY,
   cfg_value TEXT NOT NULL
 );
+
+-- Client groups, see setup_mysql.sql for notes.
+CREATE TABLE IF NOT EXISTS client_groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name VARCHAR(255) NOT NULL UNIQUE,
+  description TEXT NOT NULL DEFAULT '',
+  mode VARCHAR(8) NOT NULL DEFAULT 'add',
+  priority INTEGER NOT NULL DEFAULT 0,
+  active TINYINT NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS client_group_members (
+  group_id INTEGER NOT NULL,
+  client VARCHAR(255) NOT NULL,
+  PRIMARY KEY (group_id, client)
+);
+
+CREATE TABLE IF NOT EXISTS group_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL,
+  url VARCHAR(255) NOT NULL,
+  disabled TINYINT NOT NULL DEFAULT 0,
+  refresh INTEGER NOT NULL DEFAULT 60,
+  UNIQUE (group_id, url)
+);
