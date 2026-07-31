@@ -1,15 +1,13 @@
-{* Opening furniture for the admin panel: the side bar of links, and the permission bar
-   across the top of the main cell.
+{* The admin panel: side bar, permission bar, and the screen content inside them.
 
-   Both used to be built as arrays of HTML strings in PHP ($side_bar[] / $nav_bar[]),
-   one near-identical if/else per permission. They are now driven by data:
-
-     $side_links  list of {href, text} for the permissions this user actually has
+   Driven by data rather than HTML built in PHP:
+     $side_links  list of {href, text} for the permissions this user has
      $nav_items   list of {label, allowed} for every permission, allowed or not
-     $username    used for the logout link
+     $username    for the logout link
+     $screen      the current screen's markup, captured with output buffering
 
-   This partial deliberately leaves its table open - the screen content follows, and
-   partials/panel_close.tpl closes it. *}
+   $screen is generated markup rather than user input, so it is printed with
+   "nofilter". As individual screens get their own templates this shrinks away. *}
     <table border="1px" width="100%">
         <tr>
             <td class="side_bar" valign="top" width="16%">
@@ -30,3 +28,7 @@
 {/foreach}
                     </tr>
                 </table>
+{$screen nofilter}
+            </td>
+        </tr>
+    </table>

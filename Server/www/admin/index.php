@@ -357,14 +357,9 @@ function admin_panel($usr, $func, $proto)
         if($allowed){$side_links[] = array('href' => $item['href'], 'text' => $item['text']);}
     }
 
-    # Side bar and permission bar come from partials/panel_open.tpl, driven by the $menu
-    # data above. The partial leaves its table open; panel_close.tpl closes it after the
-    # screen content below.
-    $panel_smarty = uns_smarty();
-    $panel_smarty->assign('side_links', $side_links);
-    $panel_smarty->assign('nav_items', $nav_items);
-    $panel_smarty->assign('username', $usr);
-    echo $panel_smarty->fetch('partials/panel_open.tpl');
+    # Capture the screen so the whole panel - side bar, permission bar and content -
+    # renders from one template, instead of a partial that leaves a table open.
+    ob_start();
 
     switch($func)
     {
@@ -1571,7 +1566,13 @@ function admin_panel($usr, $func, $proto)
                     # $client_get becomes part of a dynamically-named "<client>_links" table
                     # below, which can't be parameterized in a prepared statement - reject
                     # anything that isn't a plain identifier before it's used that way.
-                    if(!is_safe_client_id($client_get)){die("Invalid client.");}
+                    if(!is_safe_client_id($client_get))
+                    {
+                        # break, not die: the panel is captured with output buffering, so
+                        # exiting here would flush raw markup with no page shell at all.
+                        echo "Invalid client.";
+                        break;
+                    }
                     $cl_func = filter_input(INPUT_GET, 'cl_func', FILTER_SANITIZE_SPECIAL_CHARS);
                     switch($cl_func)
                     {
@@ -2403,7 +2404,13 @@ function admin_panel($usr, $func, $proto)
             if($perms['edit_urls'])
             {
                 $client_get = filter_input(INPUT_GET, 'client', FILTER_SANITIZE_SPECIAL_CHARS);
-                if(!is_safe_client_id($client_get)){die("Invalid client.");}
+                if(!is_safe_client_id($client_get))
+                    {
+                        # break, not die: the panel is captured with output buffering, so
+                        # exiting here would flush raw markup with no page shell at all.
+                        echo "Invalid client.";
+                        break;
+                    }
                 ?>
                 <script type="text/javascript">
                 function SetAllCheckBoxes(FormName, FieldName, CheckValue)
@@ -3494,7 +3501,14 @@ ORDER BY friendly+0, friendly");
             break;
     }
 
-    echo uns_smarty()->fetch('partials/panel_close.tpl');
+    $screen = ob_get_clean();
+
+    $panel_smarty = uns_smarty();
+    $panel_smarty->assign('side_links', $side_links);
+    $panel_smarty->assign('nav_items', $nav_items);
+    $panel_smarty->assign('username', $usr);
+    $panel_smarty->assign('screen', $screen);
+    echo $panel_smarty->fetch('partials/panel.tpl');
 }
 
 
