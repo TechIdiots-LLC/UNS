@@ -270,6 +270,37 @@ if(login_check())
 # session-timeout path, and login_form() exits too.
 
 
+# Names the RSS feed or custom message a URL refers to, when it points back at this UNS
+# install. Both the client view and the emergency list showed a column of near-identical
+# template.php links without it, and both had their own copy of this logic.
+function uns_url_label($conn, $host, $url)
+{
+    $parse_url = parse_url($url);
+    if(str_replace("/", "", (string)$host) !== ($parse_url['host'] ?? null)){return '';}
+
+    $exp_url = explode("?", html_entity_decode($url));
+    $query_ = array();
+    foreach(explode('&', html_entity_decode($exp_url[1] ?? '')) as $e)
+    {
+        $qur = explode("=", $e);
+        $query_[$qur[0]] = $qur[1] ?? '';
+    }
+
+    $id = (int)($query_['id'] ?? 0);
+    $table = null;
+    switch($query_['type'] ?? '')
+    {
+        case "rss":       $table = 'rss_feeds'; break;
+        case "c_message": $table = 'c_messages'; break;
+    }
+    if($table === null){return '';}
+
+    $stmt = $conn->prepare("SELECT name FROM ".$table." WHERE id = ?");
+    $stmt->execute([$id]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ? $row['name'] : '';
+}
+
 function admin_panel($usr, $func, $proto)
 {
     include '../configs/vars.php';
@@ -1574,174 +1605,28 @@ function admin_panel($usr, $func, $proto)
         case "edit_emerg":
             if($perms['edit_emerg'])
             {
-                ?>
-                <script type="text/javascript">
-                function SetAllCheckBoxes(FormName, FieldName, CheckValue)
-                {
-                        if(!document.forms[FormName])
-                                return;
-                        var objCheckBoxes = document.forms[FormName].elements[FieldName];
-                        if(!objCheckBoxes)
-                                return;
-                        var countCheckBoxes = objCheckBoxes.length;
-                        if(!countCheckBoxes)
-                                objCheckBoxes.checked = CheckValue;
-                        else
-                                // set the check value for all check boxes
-                                for(var i = 0; i < countCheckBoxes; i++)
-                                        objCheckBoxes[i].checked = CheckValue;
-                }
-                </script>
-                    <?php
-                    $result = $conn->query("SELECT emerg FROM settings");
-                    $settings = $result->fetch(PDO::FETCH_ASSOC);
-                    ?>
-                <table border="1px" width="100%">
-                    <tr class="client_table_head">
-                        <th colspan="6">
-                            <form name="emerg_toggle" action="?func=emerg_set" method="POST">
-                                <input type="hidden" name="toggle" value="<?php if(!$settings['emerg']){echo '1';}else{ echo '0';}?>">
-                                <input type="submit" style="font-size:18;" value="<?php if(!$settings['emerg']){echo 'Enable';}else{ echo 'Disable';}?> Global Emergency Messages?">
-                                <br /><font size="4">This will disable normal messages on all Clients.</font>
-                            </form>
-                        </th>
-                    </tr>
-                </table>
-                <hr />
-                <table border="1px" width="100%">
-                    <tr class="client_table_head">
-                        <th colspan="6">
-                            Edit Emergency Messages for all Clients
-                        </th>
-                    </tr>
-                    <tr class="client_table_head">
-                        <th width="50px">Enabled?</th><th width="700px">URL</th><th width="90px">Refresh Time</th><th width="90px">Options</th>
-                    </tr>
-                    <?php
-                    $link = db_connect($server, $username, $password, $db, $driver);
-                    $result1 = $link->query("SELECT * FROM emerg");
-                    $emerg_all = $result1->fetchAll(PDO::FETCH_ASSOC);
-                    if(count($emerg_all) > 0)
-                    {
-                        ?><form name="client_edit" action="?func=update_emerg" method="POST"><?php
-                        foreach($emerg_all as $emerg_links)
-                        {
-                            $emerg_url_esc = htmlspecialchars($emerg_links['url'], ENT_QUOTES);
-                            ?>
-                    <tr class="client_table_body">
-                        <td align="center">
-                            <?php if($emerg_links['enabled']){echo "&#x2713;";}else{echo "&#x2717;";}?>
-                        </td>
-                        <td>
-                            <?php
-                            echo '<a class="links" href="'.$emerg_url_esc.'" target="_blank">'.$emerg_url_esc.'</a>';
-                            $parse_url = parse_url($emerg_links['url']);
-                            if(str_replace("/","",$host) == ($parse_url['host'] ?? null))
-                            {
-                                $exp_url = explode("?", html_entity_decode($emerg_links['url']));
-                                $query_url = html_entity_decode($exp_url[1] ?? '');
+                $es = $conn->query("SELECT emerg FROM settings");
+                $settings_row = $es ? $es->fetch(PDO::FETCH_ASSOC) : false;
 
-                                $query_ = array();
-                                $exp = explode('&',$query_url);
-                                foreach($exp as $e)
-                                {
-                                    $qur = explode("=", $e);
-                                    $query_[$qur[0]] = $qur[1] ?? '';
-                                }
-                                $id = (int)($query_['id'] ?? 0);
-                                switch($query_['type'] ?? '')
-                                {
-                                    case "rss":
-                                        $stmt2 = $link->prepare("SELECT * FROM rss_feeds WHERE id = ?");
-                                        $stmt2->execute([$id]);
-                                        $rss = $stmt2->fetch(PDO::FETCH_ASSOC);
-                                        if($rss){echo " (".htmlspecialchars($rss['name'], ENT_QUOTES).")";}
-                                        break;
-                                    case "c_message":
-                                        $stmt2 = $link->prepare("SELECT * FROM c_messages WHERE id = ?");
-                                        $stmt2->execute([$id]);
-                                        $c_mesg = $stmt2->fetch(PDO::FETCH_ASSOC);
-                                        if($c_mesg){echo " (".htmlspecialchars($c_mesg['name'], ENT_QUOTES).")";}
-                                        break;
-                                }
-                            }
-                            ?>
-                        </td>
-                        <td align="center">
-                                <input type="hidden" name="url_id[]" value="<?php echo (int)$emerg_links['id'];?>">
-                                <input type="text" name="refresh_t[]" style="width: 49px" value="<?php echo (int)$emerg_links['refresh'];?>">
-                        </td>
-                        <td align="center">
-                                <input type="hidden" name="url_t[]" value="<?php if($emerg_links['enabled']){echo "0";}else{echo "1";}?>">
-                                <input type="checkbox" name="urls[]" value="<?php echo (int)$emerg_links['id'];?>">
-                        </td>
-                    </tr>
-                        <?php
-                        }
-                    }else
-                    {
-                        ?>
-                    <tr>
-                        <td align="center" colspan="5">
-                            No URLS, add some.
-                        </td>
-                    </tr>
-                        <?php
-                    }
-                    ?>
-                    <tr class="client_table_tail">
-                        <td colspan="2"></td>
-                        <td align="center">
-                            <input type="submit" name="refresh" value="Update">
-                        </td>
-                        <td>
-                            <table align="center">
-                                <tr>
-                                    <td align="center">
-                                        <input type="submit" name="delete" value="Delete"><br />
-                                        <input type="submit" name="toggle" value="Enable/Disable">
-                                    </td>
-                                    <td align="center">
-                                        <input type="button" onclick="SetAllCheckBoxes('client_edit', 'urls[]', true);" value="Check"><br />
-                                        <input type="button" onclick="SetAllCheckBoxes('client_edit', 'urls[]', false);" value="Uncheck">
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    </form>
-                    <tr class="client_table_tail">
-                        <td colspan="6">
-                            <form name="save_new" action="?func=add_emerg" method="POST">
-                            <table>
-                                <tr>
-                                    <td valign="center">
-                                        URLs:
-                                    </td>
-                                    <td>
-                                        <textarea name="URLS" cols="80" rows="10">http://</textarea>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td valign="center">
-                                        Refresh Times for all:
-                                    </td>
-                                    <td>
-                                        <input type="text" name="refresh" value="<?php echo $refresh; ?>">
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td></td>
-                                    <td>
-                                        <input type='submit' value='Add URLs'>
-                                    </td>
-                                </tr>
-                            </table>
-                            </form>
-                        </td>
-                    </tr>
-                </table>
-                <?php
+                $eu = $conn->query("SELECT * FROM emerg");
+                $emerg_all = $eu ? $eu->fetchAll(PDO::FETCH_ASSOC) : array();
+                $urls = array();
+                foreach($emerg_all as $row)
+                {
+                    $urls[] = array(
+                        'id'      => (int)$row['id'],
+                        'url'     => $row['url'],
+                        'label'   => uns_url_label($conn, $host, $row['url']),
+                        'refresh' => (int)$row['refresh'],
+                        'enabled' => !empty($row['enabled']),
+                    );
+                }
+
+                $ee = uns_smarty();
+                $ee->assign('emerg_on', !empty($settings_row['emerg']));
+                $ee->assign('urls', $urls);
+                $ee->assign('refresh', (int)$refresh);
+                echo $ee->fetch('screens/edit_emerg.tpl');
             }else
             {
                 echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
@@ -1970,37 +1855,7 @@ function admin_panel($usr, $func, $proto)
                 $links = array();
                 foreach($client_links_all as $row)
                 {
-                    # When a URL points back at this UNS install, name the RSS feed or custom
-                    # message it refers to, so the list is readable rather than a row of
-                    # near-identical template.php links.
-                    $label = '';
-                    $parse_url = parse_url($row['url']);
-                    if(str_replace("/", "", $host) == ($parse_url['host'] ?? null))
-                    {
-                        $exp_url = explode("?", html_entity_decode($row['url']));
-                        $query_ = array();
-                        foreach(explode('&', $exp_url[1] ?? '') as $e)
-                        {
-                            $qur = explode("=", $e);
-                            $query_[$qur[0]] = $qur[1] ?? '';
-                        }
-                        $lid = (int)($query_['id'] ?? 0);
-                        switch($query_['type'] ?? '')
-                        {
-                            case "rss":
-                                $s2 = $conn->prepare("SELECT name FROM rss_feeds WHERE id = ?");
-                                $s2->execute([$lid]);
-                                $r2 = $s2->fetch(PDO::FETCH_ASSOC);
-                                if($r2){$label = $r2['name'];}
-                                break;
-                            case "c_message":
-                                $s2 = $conn->prepare("SELECT name FROM c_messages WHERE id = ?");
-                                $s2->execute([$lid]);
-                                $r2 = $s2->fetch(PDO::FETCH_ASSOC);
-                                if($r2){$label = $r2['name'];}
-                                break;
-                        }
-                    }
+                    $label = uns_url_label($conn, $host, $row['url']);
                     $links[] = array(
                         'id'      => (int)$row['id'],
                         'url'     => $row['url'],
