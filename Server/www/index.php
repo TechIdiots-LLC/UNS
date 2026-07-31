@@ -243,7 +243,6 @@ function get_client_url($client)
     $stmt = $conn->prepare("SELECT * FROM allowed_clients where client_name = ?");
     $stmt->execute([$client]);
     $array = $stmt->fetch(PDO::FETCH_ASSOC);
-    $cl_id = $array['id'] ?? 0;
 
     if(empty($array['client_name']))
     {
@@ -287,8 +286,15 @@ function get_client_url($client)
 
     }else
     {
-        $stmt = $conn->prepare("SELECT * FROM emerg WHERE cl_id = ? OR cl_id = '0' AND enabled = '1'");
-        $stmt->execute([$cl_id]);
+        # Emergency mode is global: every client gets the same enabled emergency URLs.
+        #
+        # This used to read "WHERE cl_id = ? OR cl_id = '0' AND enabled = '1'", targeting
+        # an emerg.cl_id column that has never existed in any of the three schemas and
+        # that nothing ever wrote. The statement therefore could not prepare on SQLite
+        # (fatal) or execute on MySQL (no rows), so turning emergency mode on served
+        # nothing at all. The old condition was also mis-grouped - "A OR B AND C" binds
+        # as "A OR (B AND C)", so the per-client branch ignored `enabled` entirely.
+        $stmt = $conn->query("SELECT * FROM emerg WHERE enabled = '1'");
 
         while($array = $stmt->fetch(PDO::FETCH_ASSOC))
         {
