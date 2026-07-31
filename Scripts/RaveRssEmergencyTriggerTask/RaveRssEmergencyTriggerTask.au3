@@ -9,7 +9,7 @@
 ;--------------------------------------------------------
 ;Author = 'Andrew Calcutt'
 ;Name = 'RaveRssEmergencyTriggerTask.au3'
-;Website = 'http://uns.randomintervals.com'
+;Website = 'http://uns.techidiots.net'
 ;Function = 'Triggers UNS emergency mode when a new RSS alert is sent from rave (http://www.ravemobilesafety.com/rave-alert/). It will stay in emergency mode for the time set in the config file. Made to be run as a schedualed task, run every minute'
 ;--------------------------------------------------------
 #include <inet.au3>
