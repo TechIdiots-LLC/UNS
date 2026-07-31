@@ -2,6 +2,12 @@
 1.) Move the AlertStationClient folder to c:\
 2.) Modify "StartClient.bat". Set the homepage to your uns url (eg. http://unsserver/uns/index.php?id=4c6a8a77381e6e6f41a536ef50891279 )
 3.) Edit "AlertStationClient\Chromium\_UNS-Extension\background.js" (or Client/ChromeExtension if loading it as a regular unpacked extension instead) and set alertxml to your uns xml url (eg. http://unsserver/uns/index.php?id=4c6a8a77381e6e6f41a536ef50891279&out=xml )
+    StartClient.bat / StartClient_Admin.bat already pass --load-extension pointing
+    at _UNS-Extension, so you don't need to load it by hand via chrome://extensions.
+    Current Chrome shows a "disable developer mode extensions" warning banner for
+    any --load-extension'd (unpacked) extension - there's no vanilla command-line
+    flag that suppresses it; that requires an enterprise policy
+    (ExtensionInstallAllowlist) if you need it gone for a kiosk deployment.
 4.) Log into the user you want to run UNS as and set uns to automatically start by running "AlertStationClient\uns_client_shell.reg"
 5.) Set default cursors to blank or a small dot(AlertStationClient\tinycursors) so they don't show on the sceen.
 6.) Use Autologon "AlertStationClient\Autologon" to make the computer automatically log on as the user you set up.
