@@ -1,7 +1,7 @@
 <?php
-#    install.php, First-run installer: creates the UNS database/user, imports
-#    setup.sql, creates the built-in admin account, and writes configs/vars.php
-#    and configs/conn.php.
+#    install.php, First-run installer: creates the UNS database (MySQL, SQL Server, or
+#    SQLite), imports the matching schema, creates the built-in admin account, and
+#    writes configs/vars.php and configs/conn.php.
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -13,33 +13,47 @@
 #    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #    GNU General Public License for more details.
 
-# Since PHP 8.1, mysqli throws on errors by default instead of returning false - restore the
-# old behavior so the "if(!$conn = new mysqli(...))" style checks below work as written.
-mysqli_report(MYSQLI_REPORT_OFF);
+require __DIR__.'/shared.php';
 
 function uns_already_installed()
 {
     if(!file_exists(__DIR__.'/configs/conn.php')){return false;}
     include __DIR__.'/configs/conn.php';
-    $conn = @new mysqli($server, $username, $password, $db);
-    if(!$conn || $conn->connect_error){return false;}
-    $result = @$conn->query("SELECT `uns_ver` FROM `settings` ORDER BY `id` ASC LIMIT 1", MYSQLI_STORE_RESULT);
-    if(!$result){return false;}
-    $row = $result->fetch_array(MYSQLI_ASSOC);
+    if(!isset($driver)){$driver = 'mysql';}
+    $conn = db_connect($server ?? '', $username ?? '', $password ?? '', $db ?? '', $driver);
+    if(!$conn){return false;}
+    $stmt = $conn->query("SELECT uns_ver FROM settings ORDER BY id ASC");
+    if(!$stmt){return false;}
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
     return !empty($row['uns_ver']);
 }
 
-# A MySQL identifier (db name, username) - conservative whitelist, no way to safely
+# A SQL identifier (db name, username) - conservative whitelist, no way to safely
 # parameterize identifiers in SQL so we validate instead.
 function is_safe_identifier($value)
 {
     return is_string($value) && preg_match('/^[A-Za-z0-9_]{1,64}$/', $value) === 1;
 }
 
-# The MySQL user "host" part of user@host - allow hostnames/IPs and the % wildcard.
+# The MySQL/SQL Server user "host" part of user@host - allow hostnames/IPs and the % wildcard.
 function is_safe_user_host($value)
 {
     return is_string($value) && preg_match('/^[A-Za-z0-9_.%-]{1,128}$/', $value) === 1;
+}
+
+# Splits a schema file into individual statements. Neither mysqli's multi_query() nor
+# PDO have a portable "run this whole .sql file" call, and our schema files never put a
+# semicolon inside a string/value, so a plain split is safe here.
+function db_run_schema_file($conn, $path)
+{
+    $sql = file_get_contents($path);
+    if($sql === false){return false;}
+    $statements = array_filter(array_map('trim', explode(';', $sql)), function($s){return $s !== '';});
+    foreach($statements as $stmt)
+    {
+        if($conn->exec($stmt) === false){return false;}
+    }
+    return true;
 }
 
 if(uns_already_installed())
@@ -64,6 +78,9 @@ if($installing)
         <tr class="client_table_head"><th colspan="2">UNS Install Process</th></tr>
         <tr class="client_table_head"><th>Step</th><th>Outcome</th></tr>
 <?php
+    $db_driver = filter_input(INPUT_POST, 'db_driver', FILTER_SANITIZE_SPECIAL_CHARS);
+    if(!in_array($db_driver, array('mysql', 'sqlsrv', 'sqlite'), true)){$db_driver = 'mysql';}
+
     $sql_host = filter_input(INPUT_POST, 'sql_host', FILTER_SANITIZE_SPECIAL_CHARS);
     $sql_root_usr = filter_input(INPUT_POST, 'sql_root_usr', FILTER_SANITIZE_SPECIAL_CHARS);
     $sql_root_pwd = (string)filter_input(INPUT_POST, 'sql_root_pwd', FILTER_UNSAFE_RAW);
@@ -75,58 +92,90 @@ if($installing)
     $user_host = filter_input(INPUT_POST, 'sql_user_host', FILTER_SANITIZE_SPECIAL_CHARS);
     if($user_host === null || $user_host === false || $user_host === ""){$user_host = "localhost";}
 
-    if(!is_safe_identifier($db_name) || !is_safe_identifier($uns_sql_usr) || !is_safe_user_host($user_host))
+    if($db_driver === 'sqlite')
     {
-        die("<tr><td colspan='2' class='Emerg'>Database name / UNS SQL username / user host may only contain letters, numbers, and underscores.</td></tr></table></div></body></html>");
+        # A single self-contained file under configs/ - no server, no separate DB user.
+        $sqlite_name = filter_input(INPUT_POST, 'sqlite_name', FILTER_SANITIZE_SPECIAL_CHARS);
+        if(!is_safe_identifier($sqlite_name)){$sqlite_name = 'uns';}
+        $db_name = __DIR__.'/configs/'.$sqlite_name.'.sqlite';
+        $sql_host = '';
+        $uns_sql_usr = '';
+        $uns_sql_pwd = '';
+
+        echo "<tr><td>Create UNS SQLite database.</td>";
+        $conn = db_connect('', '', '', $db_name, 'sqlite');
+        if($conn){echo "<td class='Good'>Success</td></tr>";}
+        else{die("<td class='Emerg'>Could not create ".htmlspecialchars($db_name, ENT_QUOTES)."</td></tr></table></div></body></html>");}
+
+        echo "<tr><td>Create UNS tables.</td>";
+        if(db_run_schema_file($conn, __DIR__.'/setup_sqlite.sql')){echo "<td class='Good'>Success</td></tr>";}
+        else{echo "<td class='Emerg'>".htmlspecialchars(db_error($conn), ENT_QUOTES)."</td></tr>";}
     }
-    if($uns_sql_pwd === "" || $sql_root_pwd === "")
+    else
     {
-        die("<tr><td colspan='2' class='Emerg'>Both the SQL admin password and the new UNS SQL user password are required.</td></tr></table></div></body></html>");
+        if(!is_safe_identifier($db_name) || !is_safe_identifier($uns_sql_usr) || !is_safe_user_host($user_host))
+        {
+            die("<tr><td colspan='2' class='Emerg'>Database name / UNS SQL username / user host may only contain letters, numbers, and underscores.</td></tr></table></div></body></html>");
+        }
+        if($uns_sql_pwd === "" || $sql_root_pwd === "")
+        {
+            die("<tr><td colspan='2' class='Emerg'>Both the SQL admin password and the new UNS SQL user password are required.</td></tr></table></div></body></html>");
+        }
+
+        # Connect as the admin/root account, with no default database selected yet.
+        $root_conn = db_connect($sql_host, $sql_root_usr, $sql_root_pwd, '', $db_driver);
+        if(!$root_conn)
+        {
+            die("<tr><td colspan='2' class='Emerg'>Could not connect as the SQL admin user: ".htmlspecialchars(db_error($root_conn), ENT_QUOTES)."</td></tr></table></div></body></html>");
+        }
+
+        if($db_driver === 'sqlsrv')
+        {
+            echo "<tr><td>Create UNS database.</td>";
+            if($root_conn->exec("IF DB_ID('$db_name') IS NULL CREATE DATABASE $db_name") !== false){echo "<td class='Good'>Success</td></tr>";}
+            else{echo "<td class='Emerg'>".htmlspecialchars(db_error($root_conn), ENT_QUOTES)."</td></tr>";}
+
+            echo "<tr><td>Create UNS SQL login and user.</td>";
+            $ok = $root_conn->exec("IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = '$uns_sql_usr') CREATE LOGIN [$uns_sql_usr] WITH PASSWORD = '".str_replace("'", "''", $uns_sql_pwd)."'") !== false;
+            $ok = $ok && $root_conn->exec("USE $db_name; IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = '$uns_sql_usr') CREATE USER [$uns_sql_usr] FOR LOGIN [$uns_sql_usr]") !== false;
+            if($ok){echo "<td class='Good'>Success</td></tr>";}
+            else{echo "<td class='Emerg'>".htmlspecialchars(db_error($root_conn), ENT_QUOTES)."</td></tr>";}
+
+            echo "<tr><td>Grant privileges on the UNS database to the UNS SQL user.</td>";
+            if($root_conn->exec("USE $db_name; ALTER ROLE db_owner ADD MEMBER [$uns_sql_usr]") !== false){echo "<td class='Good'>Success</td></tr>";}
+            else{echo "<td class='Emerg'>".htmlspecialchars(db_error($root_conn), ENT_QUOTES)."</td></tr>";}
+        }
+        else # mysql
+        {
+            echo "<tr><td>Create UNS database.</td>";
+            if($root_conn->exec("CREATE DATABASE IF NOT EXISTS $db_name DEFAULT CHARACTER SET utf8mb4") !== false){echo "<td class='Good'>Success</td></tr>";}
+            else{echo "<td class='Emerg'>".htmlspecialchars(db_error($root_conn), ENT_QUOTES)."</td></tr>";}
+
+            echo "<tr><td>Create UNS SQL user.</td>";
+            $quoted_pwd = $root_conn->quote($uns_sql_pwd);
+            if($root_conn->exec("CREATE USER IF NOT EXISTS '$uns_sql_usr'@'$user_host' IDENTIFIED BY $quoted_pwd") !== false){echo "<td class='Good'>Success</td></tr>";}
+            else{echo "<td class='Emerg'>".htmlspecialchars(db_error($root_conn), ENT_QUOTES)."</td></tr>";}
+
+            echo "<tr><td>Grant privileges on the UNS database to the UNS SQL user.</td>";
+            if($root_conn->exec("GRANT ALL PRIVILEGES ON $db_name.* TO '$uns_sql_usr'@'$user_host'") !== false){echo "<td class='Good'>Success</td></tr>";}
+            else{echo "<td class='Emerg'>".htmlspecialchars(db_error($root_conn), ENT_QUOTES)."</td></tr>";}
+            $root_conn->exec("FLUSH PRIVILEGES");
+        }
+
+        echo "<tr><td>Create UNS tables.</td>";
+        $root_conn->exec("USE $db_name");
+        if(db_run_schema_file($root_conn, __DIR__.'/setup_'.$db_driver.'.sql')){echo "<td class='Good'>Success</td></tr>";}
+        else{echo "<td class='Emerg'>".htmlspecialchars(db_error($root_conn), ENT_QUOTES)."</td></tr>";}
+        $root_conn = null;
+
+        echo "<tr><td>Reconnect as the UNS SQL user.</td>";
+        $conn = db_connect($sql_host, $uns_sql_usr, $uns_sql_pwd, $db_name, $db_driver);
+        if(!$conn)
+        {
+            die("<td class='Emerg'>".htmlspecialchars(db_error($conn), ENT_QUOTES)."</td></tr></table></div></body></html>");
+        }
+        echo "<td class='Good'>Connected</td></tr>";
     }
-
-    $link = @new mysqli($sql_host, $sql_root_usr, $sql_root_pwd);
-    if(!$link || $link->connect_error)
-    {
-        die("<tr><td colspan='2' class='Emerg'>Could not connect as the SQL admin user: ".htmlspecialchars($link ? $link->connect_error : "unknown error", ENT_QUOTES)."</td></tr></table></div></body></html>");
-    }
-
-    # identifiers are whitelisted above, so backtick-quoting them here is safe.
-    $sql = "CREATE DATABASE IF NOT EXISTS `$db_name` DEFAULT CHARACTER SET utf8";
-    echo "<tr><td>Create UNS database.</td>";
-    if($link->query($sql)){echo "<td class='Good'>Success</td></tr>";}
-    else{echo "<td class='Emerg'>".htmlspecialchars($link->error, ENT_QUOTES)."</td></tr>";}
-
-    $sql = "CREATE USER IF NOT EXISTS '".$link->real_escape_string($uns_sql_usr)."'@'".$link->real_escape_string($user_host)."' IDENTIFIED BY '".$link->real_escape_string($uns_sql_pwd)."'";
-    echo "<tr><td>Create UNS SQL user.</td>";
-    if($link->query($sql)){echo "<td class='Good'>Success</td></tr>";}
-    else{echo "<td class='Emerg'>".htmlspecialchars($link->error, ENT_QUOTES)."</td></tr>";}
-
-    $sql = "GRANT ALL PRIVILEGES ON `$db_name`.* TO '".$link->real_escape_string($uns_sql_usr)."'@'".$link->real_escape_string($user_host)."'";
-    echo "<tr><td>Grant privileges on the UNS database to the UNS SQL user.</td>";
-    if($link->query($sql)){echo "<td class='Good'>Success</td></tr>";}
-    else{echo "<td class='Emerg'>".htmlspecialchars($link->error, ENT_QUOTES)."</td></tr>";}
-    $link->query("FLUSH PRIVILEGES");
-
-    $link->select_db($db_name);
-    $sql = file_get_contents(__DIR__.'/setup.sql');
-    echo "<tr><td>Create UNS tables.</td>";
-    if($sql !== false && $link->multi_query($sql))
-    {
-        do{ $link->store_result(); }while($link->more_results() && $link->next_result());
-        echo "<td class='Good'>Success</td></tr>";
-    }else
-    {
-        echo "<td class='Emerg'>".htmlspecialchars($link->error, ENT_QUOTES)."</td></tr>";
-    }
-    $link->close();
-
-    echo "<tr><td>Reconnect as the UNS SQL user.</td>";
-    $conn = new mysqli($sql_host, $uns_sql_usr, $uns_sql_pwd, $db_name);
-    if($conn->connect_error)
-    {
-        die("<td class='Emerg'>".htmlspecialchars($conn->connect_error, ENT_QUOTES)."</td></tr></table></div></body></html>");
-    }
-    echo "<td class='Good'>Connected</td></tr>";
 
     $characters = '0123456789abcdefghijklmnopqrstuvwxyz';
     $seed = '';
@@ -141,16 +190,15 @@ if($installing)
     $password_hash = password_hash($admin_pwd, PASSWORD_DEFAULT);
 
     echo "<tr><td>Create UNS internal admin user.</td>";
-    $stmt = $conn->prepare("INSERT INTO `internal_users` (`username`, `password`, `disabled`, `failed`) VALUES ('unsadmin', ?, 0, 0)");
-    $stmt->bind_param("s", $password_hash);
-    if($stmt->execute())
+    $stmt = $conn->prepare("INSERT INTO internal_users (username, password, disabled, failed) VALUES ('unsadmin', ?, 0, 0)");
+    if($stmt->execute([$password_hash]))
     {
-        $stmt2 = $conn->prepare("INSERT INTO `allowed_users` (`username`, `domain`, `edit_urls`, `edit_emerg`, `edit_users`, `edit_options`, `c_messages`, `rss_feeds`) VALUES ('unsadmin', '', 1, 1, 1, 1, 1, 1)");
+        $stmt2 = $conn->prepare("INSERT INTO allowed_users (username, domain, edit_urls, edit_emerg, edit_users, edit_options, c_messages, rss_feeds) VALUES ('unsadmin', '', 1, 1, 1, 1, 1, 1)");
         if($stmt2->execute()){echo "<td class='Good'>Success</td></tr>";}
-        else{echo "<td class='Emerg'>".htmlspecialchars($conn->error, ENT_QUOTES)."</td></tr>";}
+        else{echo "<td class='Emerg'>".htmlspecialchars(db_error($stmt2), ENT_QUOTES)."</td></tr>";}
     }else
     {
-        echo "<td class='Emerg'>".htmlspecialchars($conn->error, ENT_QUOTES)."</td></tr>";
+        echo "<td class='Emerg'>".htmlspecialchars(db_error($stmt), ENT_QUOTES)."</td></tr>";
     }
 
     $uns_name = (string)filter_input(INPUT_POST, 'uns_name', FILTER_SANITIZE_SPECIAL_CHARS);
@@ -196,6 +244,7 @@ if($installing)
         ."\$template_foot_cmsg = '\t\t\t\t\t\t\t</td>\n\n\t\t\t\t\t\t</tr>\n\t\t\t\t\t</table>\n\n\t\t\t\t</td>\n\t\t\t</tr>\n\t\t</table>\n\t</body>\n</html>';\n";
 
     $conn_file = "<?php\n"
+        ."\$driver = ".var_export($db_driver, true).";\n"
         ."\$server = ".var_export($sql_host, true).";\n"
         ."\$username = ".var_export($uns_sql_usr, true).";\n"
         ."\$password = ".var_export($uns_sql_pwd, true).";\n"
@@ -220,6 +269,15 @@ if($installing)
             document.forms['UNS_Install'].elements['ldap_domain'].disabled = !document.forms['UNS_Install'].elements['ldap'].checked;
             document.forms['UNS_Install'].elements['ldap_port'].disabled = !document.forms['UNS_Install'].elements['ldap'].checked;
         }
+        function updateDriver() {
+            var driver = document.forms['UNS_Install'].elements['db_driver'].value;
+            var isSqlite = (driver === 'sqlite');
+            var serverFields = document.getElementsByClassName('sql-server-field');
+            for (var i = 0; i < serverFields.length; i++) {
+                serverFields[i].style.display = isSqlite ? 'none' : '';
+            }
+            document.getElementById('sqlite-field').style.display = isSqlite ? '' : 'none';
+        }
     </script>
     <form name="UNS_Install" action="?installing=1" method="post">
         <table border="1" width="75%" class="main_cell">
@@ -230,8 +288,8 @@ if($installing)
                 <td><?php echo (PHP_VERSION_ID >= 80000) ? "<font color='limegreen'>GOOD! {".PHP_VERSION."}</font>" : "<font color='red'>PHP version is too old.<br />".PHP_VERSION."</font>"; ?></td>
             </tr>
             <tr class="pre">
-                <td>MySQLi extension?</td>
-                <td><?php echo extension_loaded("mysqli") ? "<font color='limegreen'>GOOD!</font>" : "<font color='red'>mysqli extension is not loaded.</font>"; ?></td>
+                <td>PDO extension?</td>
+                <td><?php echo extension_loaded("pdo") ? "<font color='limegreen'>GOOD!</font>" : "<font color='red'>pdo extension is not loaded.</font>"; ?></td>
             </tr>
             <tr class="pre">
                 <td>XML Functions?</td>
@@ -241,14 +299,25 @@ if($installing)
                 <td>LDAP Functions?</td>
                 <td><?php echo function_exists("ldap_connect") ? "<font color='limegreen'>GOOD!</font>" : "<font color='orange'>LDAP functions not found, Active Directory login will not work.</font>"; ?></td>
             </tr>
-            <tr class="client_table_head"><th colspan="2">Set up your SQL connection</th></tr>
-            <tr class="client_table_body"><td>SQL Host</td><td><input type="text" name="sql_host" style="width:50%" value="localhost"/></td></tr>
-            <tr class="client_table_body"><td>SQL Admin User</td><td><input type="text" name="sql_root_usr" style="width:50%" value="root"/></td></tr>
-            <tr class="client_table_body"><td>SQL Admin Password</td><td><input type="password" name="sql_root_pwd" style="width:50%" value=""/></td></tr>
-            <tr class="client_table_body"><td>UNS SQL Username</td><td><input type="text" name="uns_sql_usr" style="width:50%" value="uns_user"/></td></tr>
-            <tr class="client_table_body"><td>UNS SQL Password</td><td><input type="password" name="uns_sql_pwd" style="width:50%" value=""/></td></tr>
-            <tr class="client_table_body"><td>Database Name</td><td><input type="text" name="db_name" style="width:50%" value="uns"/></td></tr>
-            <tr class="client_table_body"><td>UNS SQL User's allowed host <font size="1">(usually "localhost")</font></td><td><input type="text" name="sql_user_host" style="width:50%" value="localhost"/></td></tr>
+            <tr class="client_table_head"><th colspan="2">Choose your database</th></tr>
+            <tr class="client_table_body">
+                <td>Database Type</td>
+                <td>
+                    <select name="db_driver" onchange="updateDriver()">
+                        <option value="mysql">MySQL / MariaDB</option>
+                        <option value="sqlsrv">Microsoft SQL Server</option>
+                        <option value="sqlite">SQLite (self-contained, no server needed)</option>
+                    </select>
+                </td>
+            </tr>
+            <tr class="client_table_body sql-server-field"><td>SQL Host</td><td><input type="text" name="sql_host" style="width:50%" value="localhost"/></td></tr>
+            <tr class="client_table_body sql-server-field"><td>SQL Admin User</td><td><input type="text" name="sql_root_usr" style="width:50%" value="root"/></td></tr>
+            <tr class="client_table_body sql-server-field"><td>SQL Admin Password</td><td><input type="password" name="sql_root_pwd" style="width:50%" value=""/></td></tr>
+            <tr class="client_table_body sql-server-field"><td>UNS SQL Username</td><td><input type="text" name="uns_sql_usr" style="width:50%" value="uns_user"/></td></tr>
+            <tr class="client_table_body sql-server-field"><td>UNS SQL Password</td><td><input type="password" name="uns_sql_pwd" style="width:50%" value=""/></td></tr>
+            <tr class="client_table_body sql-server-field"><td>Database Name</td><td><input type="text" name="db_name" style="width:50%" value="uns"/></td></tr>
+            <tr class="client_table_body sql-server-field"><td>UNS SQL User's allowed host <font size="1">(usually "localhost")</font></td><td><input type="text" name="sql_user_host" style="width:50%" value="localhost"/></td></tr>
+            <tr class="client_table_body" id="sqlite-field" style="display:none"><td>SQLite file name <font size="1">(saved under configs/)</font></td><td><input type="text" name="sqlite_name" style="width:50%" value="uns"/></td></tr>
             <tr class="client_table_head"><th colspan="2">Set your variables</th></tr>
             <tr class="client_table_body"><td>Instance Name</td><td><input type="text" name="uns_name" style="width:50%" value="URL Notification System"/></td></tr>
             <tr class="client_table_body"><td>Hostname</td><td><input type="text" name="hostname" style="width:50%" value="your.uns.server"/></td></tr>

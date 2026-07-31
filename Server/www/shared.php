@@ -15,11 +15,107 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-# Since PHP 8.1, mysqli throws mysqli_sql_exception on errors by default (MYSQLI_REPORT_ERROR |
-# MYSQLI_REPORT_STRICT) instead of returning false. This whole codebase was written against the
-# old "check the return value" behavior (eg. `if(!$conn = mysqli_connect(...)){return -1;}`), so
-# restore that here rather than rewriting every call site to a try/catch.
-mysqli_report(MYSQLI_REPORT_OFF);
+# --- Database portability layer -------------------------------------------
+# UNS supports MySQL, Microsoft SQL Server, and SQLite through PDO. $driver
+# comes from configs/conn.php ('mysql' [default], 'sqlsrv', or 'sqlite'). For
+# sqlite, $db is a filesystem path to the database file rather than a name,
+# and $server/$username/$password are ignored.
+
+function db_connect($server, $username, $password, $db, $driver = 'mysql')
+{
+    try
+    {
+        switch($driver)
+        {
+            case 'sqlite':
+                $pdo = new PDO('sqlite:'.$db);
+                $pdo->exec('PRAGMA foreign_keys = ON');
+                # This app opens a fresh connection per function call (fine for a
+                # client/server DB, but SQLite is a single file with much stricter
+                # locking). WAL mode lets readers and a writer coexist instead of
+                # blocking outright, and the busy timeout makes PDO retry for a bit
+                # instead of immediately failing with "database is locked".
+                $pdo->exec('PRAGMA journal_mode = WAL');
+                $pdo->exec('PRAGMA busy_timeout = 5000');
+                break;
+            case 'sqlsrv':
+                # Newer ODBC Driver for SQL Server versions default to encrypted connections
+                # with strict certificate validation, which breaks connections to instances
+                # using a self-signed/internal cert unless this is set (same as WifiDB's
+                # SQL.inc.php - see the connection notes there for the underlying reason).
+                $pdo = new PDO('sqlsrv:Server='.$server.';Database='.$db.';TrustServerCertificate=true', $username, $password);
+                break;
+            case 'mysql':
+            default:
+                $pdo = new PDO('mysql:host='.$server.';dbname='.$db.';charset=utf8mb4', $username, $password);
+                break;
+        }
+        return $pdo;
+    }
+    catch(PDOException $e)
+    {
+        # Callers throughout this app expect a falsy return on connection failure
+        # (mirroring the old mysqli_connect() contract), not an exception.
+        return false;
+    }
+}
+
+# PDO/PDOStatement both expose errorInfo(); this works for either.
+function db_error($conn)
+{
+    if(!$conn){return 'No connection';}
+    $info = $conn->errorInfo();
+    return $info[2] ?? '';
+}
+
+function db_truncate_table($conn, $driver, $table)
+{
+    if($driver === 'sqlite')
+    {
+        return $conn->exec('DELETE FROM '.$table) !== false;
+    }
+    return $conn->exec('TRUNCATE TABLE '.$table) !== false;
+}
+
+# Creates the per-client "<client>_links" table. $table must already be validated
+# against is_safe_client_id()-style whitelisting by the caller - it can't be
+# parameterized since it's an identifier, not a value.
+function db_create_links_table($conn, $driver, $table)
+{
+    switch($driver)
+    {
+        case 'sqlite':
+            $sql = "CREATE TABLE IF NOT EXISTS $table (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url VARCHAR(255) NOT NULL UNIQUE,
+                disabled TINYINT NOT NULL DEFAULT 0,
+                refresh INTEGER NOT NULL DEFAULT 60
+            )";
+            break;
+        case 'sqlsrv':
+            $sql = "IF OBJECT_ID('$table', 'U') IS NULL
+            CREATE TABLE $table (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                url VARCHAR(255) NOT NULL UNIQUE,
+                disabled TINYINT NOT NULL DEFAULT 0,
+                refresh INT NOT NULL DEFAULT 60
+            )";
+            break;
+        case 'mysql':
+        default:
+            $sql = "CREATE TABLE IF NOT EXISTS $table (
+                id int(255) NOT NULL AUTO_INCREMENT,
+                url varchar(255) NOT NULL,
+                disabled tinyint(4) NOT NULL DEFAULT '0',
+                refresh int(5) NOT NULL DEFAULT '60',
+                PRIMARY KEY (id),
+                UNIQUE (url)
+            ) ENGINE=MyISAM DEFAULT CHARSET=utf8 AUTO_INCREMENT=1";
+            break;
+    }
+    return $conn->exec($sql) !== false;
+}
+# ----------------------------------------------------------------------------
 
 function gen_base_urls($dir)
 {
@@ -43,12 +139,13 @@ function check_install($dir)
     if(!include_once "$dir/configs/conn.php")
     { echo "No Conn.php Config found."; return 0;}
 
-    $conn = @new mysqli($server, $username, $password, $db);
-    if(!$conn || $conn->connect_error){echo "Failed to connect: ".($conn ? $conn->connect_error : "unknown error"); return 0;}
+    if(!isset($driver)){$driver = 'mysql';}
+    $conn = db_connect($server, $username, $password, $db, $driver);
+    if(!$conn){echo "Failed to connect: ".db_error($conn); return 0;}
 
-    $sql = "SELECT `uns_ver` FROM `settings` ORDER BY `id` ASC LIMIT 1";
-    if($result = @$conn->query($sql, MYSQLI_STORE_RESULT))
-    {$uns_ver = $result->fetch_array(MYSQLI_ASSOC);}
+    $stmt = $conn->query("SELECT uns_ver FROM settings ORDER BY id ASC");
+    if($stmt)
+    {$uns_ver = $stmt->fetch(PDO::FETCH_ASSOC);}
     else{return 0;}
 
     if(empty($uns_ver['uns_ver'])){echo "Database Not Installed Properly.<br />"; return 0;}
@@ -71,10 +168,11 @@ function blinky($id)
         "admin" => 64
     );
 
-    $conn = new mysqli($server, $username, $password, $db);
-    $sql = "SELECT emerg FROM settings LIMIT 1";
-    $result = $conn->query($sql, MYSQLI_STORE_RESULT);
-    $emerg = $result->fetch_array(MYSQLI_ASSOC);
+    if(!isset($driver)){$driver = 'mysql';}
+    $conn = db_connect($server, $username, $password, $db, $driver);
+    if(!$conn){return 0;}
+    $stmt = $conn->query("SELECT emerg FROM settings");
+    $emerg = $stmt->fetch(PDO::FETCH_ASSOC);
 
     $dec = 255; #all LEDs off by default
     if($emerg['emerg']){$dec -= 128;} #set Emerg led in var

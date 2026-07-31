@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS `c_messages` (
   `id` int(255) NOT NULL AUTO_INCREMENT,
   `name` varchar(255) NOT NULL,
   `body` text NOT NULL,
-  `refresh` int(255) NOT NULL,
+  `refresh` int(255) NOT NULL DEFAULT '0',
   `wrapper` tinyint(4) NOT NULL DEFAULT '1',
   UNIQUE KEY `name` (`name`),
   KEY `id` (`id`)
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS `hash_links` (
   `id` int(255) NOT NULL AUTO_INCREMENT,
   `hash` varchar(32) NOT NULL,
   `time` int(9) NOT NULL,
-  `user` varchar(255) NOT NULL,
+  `username` varchar(255) NOT NULL,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB  DEFAULT CHARSET=latin1 AUTO_INCREMENT=0;
 -- --------------------------------------------------------

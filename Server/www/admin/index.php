@@ -45,20 +45,19 @@ if($func_1 === "logout")
     if(@$_COOKIE['login_yes'])
     {
         include "../configs/conn.php";
-        $conn = new mysqli($server, $username, $password, $db);
+        if(!isset($driver)){$driver = 'mysql';}
+        $conn = db_connect($server, $username, $password, $db, $driver);
         $cookie_exp = explode(":", filter_input(INPUT_COOKIE, 'login_yes', FILTER_SANITIZE_SPECIAL_CHARS));
         $cookie_hash = $cookie_exp[0];
 
-        $stmt = $conn->prepare("SELECT * FROM `hash_links` where `hash` = ?");
-        $stmt->bind_param("s", $cookie_hash);
-        $stmt->execute();
-        $links = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+        $stmt = $conn->prepare("SELECT * FROM hash_links where hash = ?");
+        $stmt->execute([$cookie_hash]);
+        $links = $stmt->fetch(PDO::FETCH_ASSOC);
         $del_ok = true;
         if(!empty($links['id']))
         {
-            $del_stmt = $conn->prepare("DELETE FROM `hash_links` where `id` = ?");
-            $del_stmt->bind_param("i", $links['id']);
-            $del_ok = $del_stmt->execute();
+            $del_stmt = $conn->prepare("DELETE FROM hash_links where id = ?");
+            $del_ok = $del_stmt->execute([$links['id']]);
         }
         if($del_ok)
         {
@@ -100,9 +99,10 @@ if($GET_login)
     {
         login_form("Password cannot be Blank.");
     }
-    $conn = new mysqli($server, $username, $password, $db);
-    $result = $conn->query("SELECT * FROM `settings` limit 1", MYSQLI_STORE_RESULT);
-    $settings = $result->fetch_array(MYSQLI_ASSOC);
+    if(!isset($driver)){$driver = 'mysql';}
+    $conn = db_connect($server, $username, $password, $db, $driver);
+    $stmt = $conn->query("SELECT * FROM settings limit 1");
+    $settings = $stmt->fetch(PDO::FETCH_ASSOC);
     if($LDAP)
     {
         $internal = 0;
@@ -116,10 +116,9 @@ if($GET_login)
         {
             $user = $usr_exp[1];
             $u_domain = $usr_exp[0];
-            $stmt = $conn->prepare("SELECT * FROM `allowed_users` where `domain` = ? AND `username` = ?");
-            $stmt->bind_param("ss", $u_domain, $user);
-            $stmt->execute();
-            $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+            $stmt = $conn->prepare("SELECT * FROM allowed_users where domain = ? AND username = ?");
+            $stmt->execute([$u_domain, $user]);
+            $array = $stmt->fetch(PDO::FETCH_ASSOC);
             if($array && $user == $array['username'])
             {
                 $ldap = ldap_connect($domain, $port);
@@ -139,18 +138,16 @@ if($GET_login)
             }
         }
     }
-    $stmt = $conn->prepare("SELECT * FROM `allowed_users` where `username` = ?");
-    $stmt->bind_param("s", $usr);
-    $stmt->execute();
-    $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+    $stmt = $conn->prepare("SELECT * FROM allowed_users where username = ?");
+    $stmt->execute([$usr]);
+    $array = $stmt->fetch(PDO::FETCH_ASSOC);
     if($array && $usr == $array['username'])
     {
         if(!$settings['built_in_admin'] && $usr == "unsadmin")
         {
-            $stmt = $conn->prepare("SELECT `username`,`password` FROM `internal_users` where `username` = ?");
-            $stmt->bind_param("s", $usr);
-            $stmt->execute();
-            $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+            $stmt = $conn->prepare("SELECT username,password FROM internal_users where username = ?");
+            $stmt->execute([$usr]);
+            $array = $stmt->fetch(PDO::FETCH_ASSOC);
             $stored_pwd = $array['password'] ?? '';
             $valid = false;
             if($stored_pwd !== '' && password_get_info($stored_pwd)['algo'] !== null)
@@ -162,9 +159,8 @@ if($GET_login)
                 # legacy md5(password.seed) format - accept it, then opportunistically upgrade
                 $valid = true;
                 $new_hash = password_hash($pwd, PASSWORD_DEFAULT);
-                $upd_stmt = $conn->prepare("UPDATE `internal_users` SET `password` = ? WHERE `username` = ?");
-                $upd_stmt->bind_param("ss", $new_hash, $usr);
-                $upd_stmt->execute();
+                $upd_stmt = $conn->prepare("UPDATE internal_users SET password = ? WHERE username = ?");
+                $upd_stmt->execute([$new_hash, $usr]);
             }
             if($valid)
             {
@@ -193,18 +189,18 @@ if(login_check())
 {
     include "../configs/vars.php";
     include "../configs/conn.php";
+    if(!isset($driver)){$driver = 'mysql';}
     $cookie = explode(":", filter_input(INPUT_COOKIE, 'login_yes', FILTER_SANITIZE_SPECIAL_CHARS));
     $cookie_hash = $cookie[0];
-    $conn = new mysqli($server, $username, $password, $db);
-    $stmt = $conn->prepare("SELECT * FROM `hash_links` where `hash` = ?");
-    $stmt->bind_param("s", $cookie_hash);
-    $stmt->execute();
-    $hash = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+    $conn = db_connect($server, $username, $password, $db, $driver);
+    $stmt = $conn->prepare("SELECT * FROM hash_links where hash = ?");
+    $stmt->execute([$cookie_hash]);
+    $hash = $stmt->fetch(PDO::FETCH_ASSOC);
     $ID = $hash['id'] ?? null;
     # The username is always taken from the server-side hash_links row, never from the
     # client-supplied cookie value - otherwise anyone with any valid session hash could
     # edit their own cookie to claim to be a different (eg. admin) user.
-    $cookie_user = $hash['user'] ?? null;
+    $cookie_user = $hash['username'] ?? null;
     if($ID !== null && $cookie_user !== null && time() < $hash['time'])
     {
         ?>
@@ -215,10 +211,9 @@ if(login_check())
     </head>
     <body class="main_body">
         <?php
-        $stmt = $conn->prepare("SELECT tz FROM `allowed_users` where `username` = ?");
-        $stmt->bind_param("s", $cookie_user);
-        $stmt->execute();
-        $tx_array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+        $stmt = $conn->prepare("SELECT tz FROM allowed_users where username = ?");
+        $stmt->execute([$cookie_user]);
+        $tx_array = $stmt->fetch(PDO::FETCH_ASSOC);
         $exp = explode(":", $tx_array['tz'] ?? 'ewt:0');
         $tz_list = timezone_abbreviations_list();
         date_default_timezone_set($tz_list[$exp[0]][$exp[1]]["timezone_id"]);
@@ -230,14 +225,13 @@ if(login_check())
         setcookie("login_yes", "", time()-3600 , $path, '', $SSL, 1);
         login_form("Session timed out. Log In Again.");
         $now = time();
-        $del_stmt = $conn->prepare("DELETE FROM `hash_links` where `time` < ?");
-        $del_stmt->bind_param("i", $now);
-        if(!$del_stmt->execute())
+        $del_stmt = $conn->prepare("DELETE FROM hash_links where time < ?");
+        if(!$del_stmt->execute([$now]))
         {
-            echo $conn->error;
+            echo db_error($del_stmt);
         }
     }
-    
+
 }
 ?>
         <div align="center">
@@ -264,7 +258,8 @@ function admin_panel($usr, $func, $proto)
     $admin_url = $GLOBALS['admin_url'];
     $reg_url = $GLOBALS['reg_url'];
     
-    $conn = new mysqli($server, $username, $password, $db);
+    if(!isset($driver)){$driver = 'mysql';}
+    $conn = db_connect($server, $username, $password, $db, $driver);
     ?>
     <table width="100%">
         <tr>
@@ -278,10 +273,9 @@ function admin_panel($usr, $func, $proto)
                 <form name="tz_change" action="?func=chg_tz" method="POST">
                     <select name="cl_timezone" onchange='this.form.submit()'>
                     <?php
-                    $stmt = $conn->prepare("SELECT `tz` FROM `allowed_users` where `username` = ?");
-                    $stmt->bind_param("s", $usr);
-                    $stmt->execute();
-                    $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                    $stmt = $conn->prepare("SELECT tz FROM allowed_users where username = ?");
+                    $stmt->execute([$usr]);
+                    $array = $stmt->fetch(PDO::FETCH_ASSOC);
                     $user_TZ = explode(":", $array['tz'] ?? 'ewt:0');
                     echo htmlspecialchars($array['tz'] ?? '', ENT_QUOTES);
                     foreach(timezone_abbreviations_list() as $key=>$TZ_L)
@@ -305,8 +299,8 @@ function admin_panel($usr, $func, $proto)
     </table>
     
     <?php
-    $result = $conn->query("SELECT `emerg` FROM `settings` LIMIT 1", MYSQLI_STORE_RESULT);
-    $emerg = $result->fetch_array(MYSQLI_ASSOC);
+    $result = $conn->query("SELECT emerg FROM settings");
+    $emerg = $result->fetch(PDO::FETCH_ASSOC);
     if($emerg['emerg'])
     {
         ?>
@@ -317,10 +311,9 @@ function admin_panel($usr, $func, $proto)
         </table>
         <?php
     }
-    $stmt = $conn->prepare("SELECT * FROM `allowed_users` where `username` = ?");
-    $stmt->bind_param("s", $usr);
-    $stmt->execute();
-    $perms = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+    $stmt = $conn->prepare("SELECT * FROM allowed_users where username = ?");
+    $stmt->execute([$usr]);
+    $perms = $stmt->fetch(PDO::FETCH_ASSOC);
     #############
     $o=0;
     if($perms['edit_urls'])
@@ -425,9 +418,8 @@ function admin_panel($usr, $func, $proto)
     {
         case "chg_tz":
             $cl_timezone = filter_input(INPUT_POST, 'cl_timezone', FILTER_SANITIZE_SPECIAL_CHARS);
-            $stmt = $conn->prepare("UPDATE `allowed_users` SET `tz` = ? WHERE `username` = ?");
-            $stmt->bind_param("ss", $cl_timezone, $usr);
-            if($stmt->execute())
+            $stmt = $conn->prepare("UPDATE allowed_users SET tz = ? WHERE username = ?");
+            if($stmt->execute([$cl_timezone, $usr]))
             {
                 echo "Changed Time Zone.";
                 ?>
@@ -437,7 +429,7 @@ function admin_panel($usr, $func, $proto)
                 <?php
             }else
             {
-                echo "Failed to Change Time Zone.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                echo "Failed to Change Time Zone.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
             }
             break;
         case "del_backup":
@@ -636,11 +628,15 @@ function admin_panel($usr, $func, $proto)
             else{echo "Failed to write Vars Config File.<br />";}
             sleep(1);
 
+            # This form doesn't let you switch database drivers (that would need a real
+            # migration, not just new connection strings) - it only preserves whatever
+            # $driver the existing configs/conn.php already has.
             $conn_file = "<?php\n"
-                ."\$server = ".var_export($sql_host, true).";  # MySQL Host\n"
-                ."\$username = ".var_export($uns_sql_usr, true).";      # User for UNS\n"
-                ."\$password = ".var_export($uns_sql_pwd, true).";      # Users password\n"
-                ."\$db = ".var_export($db_name, true).";            # Database with UNS tables\n";
+                ."\$driver = ".var_export($driver ?? 'mysql', true).";\n"
+                ."\$server = ".var_export($sql_host, true).";  # DB Host (unused for sqlite)\n"
+                ."\$username = ".var_export($uns_sql_usr, true).";      # DB user (unused for sqlite)\n"
+                ."\$password = ".var_export($uns_sql_pwd, true).";      # DB password (unused for sqlite)\n"
+                ."\$db = ".var_export($db_name, true).";            # Database name (mysql/sqlsrv) or file path (sqlite)\n";
 
             if($fp1 = fopen($cwd."configs/conn.php", 'w+'))
             {fwrite($fp1, $conn_file);echo "Wrote Conn Config File.<br />";
@@ -876,9 +872,8 @@ function admin_panel($usr, $func, $proto)
                         $url = @filter_input(INPUT_POST, 'url_n', FILTER_SANITIZE_SPECIAL_CHARS);
                         $name = @filter_input(INPUT_POST, 'name_n', FILTER_SANITIZE_SPECIAL_CHARS);
                         $maxlines = (int)@filter_input(INPUT_POST, 'maxlines_n', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $stmt = $conn->prepare("INSERT INTO `rss_feeds` (`name`, `url`, `maxlines`) VALUES (?, ?, ?)");
-                        $stmt->bind_param("ssi", $name, $url, $maxlines);
-                        if($stmt->execute())
+                        $stmt = $conn->prepare("INSERT INTO rss_feeds (name, url, maxlines) VALUES (?, ?, ?)");
+                        if($stmt->execute([$name, $url, $maxlines]))
                         {
                             echo "Added Feeds.";
                             ?>
@@ -888,7 +883,7 @@ function admin_panel($usr, $func, $proto)
                             <?php
                         }else
                         {
-                            echo "Failed to update Feeds<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                            echo "Failed to update Feeds<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                         }
                         break;
                     case "edit_rss":
@@ -907,53 +902,48 @@ function admin_panel($usr, $func, $proto)
                             {
                                 $del_esc = htmlspecialchars($del, ENT_QUOTES);
                                 $search = $reg_url."html/template.php?type=rss&id=$del";
-                                $stmt = $conn->prepare("SELECT id FROM `emerg` WHERE `url` = ?");
-                                $stmt->bind_param("s", $search);
-                                $stmt->execute();
-                                $id = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                $stmt = $conn->prepare("SELECT id FROM emerg WHERE url = ?");
+                                $stmt->execute([$search]);
+                                $id = $stmt->fetch(PDO::FETCH_ASSOC);
                                 if(!empty($id['id']))
                                 {
                                     echo "Found message in Emergency Table.....";
-                                    $del_stmt = $conn->prepare("DELETE FROM `emerg` WHERE `id` = ?");
-                                    $del_stmt->bind_param("i", $id['id']);
-                                    if($del_stmt->execute())
+                                    $del_stmt = $conn->prepare("DELETE FROM emerg WHERE id = ?");
+                                    if($del_stmt->execute([$id['id']]))
                                     {echo "Removed!<br />";}
                                     else{echo "Failed to Remove<br />";}
                                 }else{echo "Custom Message [$del_esc] was not in the Emergency Table<br />";}
                                 #Gather client ids list.
-                                $result = $conn->query("SELECT client_name FROM `allowed_clients`", MYSQLI_STORE_RESULT);
+                                $result = $conn->query("SELECT client_name FROM allowed_clients");
                                 $cl_c = 0;
                                 #Check Client lists for Custom Messages
-                                $link = mysqli_connect($server, $username, $password, $db);
-                                while($clid = $result->fetch_array(MYSQLI_ASSOC))
+                                $link = db_connect($server, $username, $password, $db, $driver);
+                                while($clid = $result->fetch(PDO::FETCH_ASSOC))
                                 {
                                     $cl = $clid['client_name'];
                                     if(!is_safe_client_id($cl)){continue;}
                                     $like_pattern = '%rss&id='.$del;
-                                    $stmt1 = mysqli_prepare($link, "SELECT id FROM `".$cl."_links` WHERE `url` LIKE ? LIMIT 1");
-                                    mysqli_stmt_bind_param($stmt1, "s", $like_pattern);
-                                    mysqli_stmt_execute($stmt1);
-                                    $id = mysqli_fetch_array(mysqli_stmt_get_result($stmt1), MYSQLI_ASSOC);
+                                    $stmt1 = $link->prepare("SELECT id FROM ".$cl."_links WHERE url LIKE ?");
+                                    $stmt1->execute([$like_pattern]);
+                                    $id = $stmt1->fetch(PDO::FETCH_ASSOC);
                                     if(!empty($id['id']))
                                     {
                                         echo (int)$id['id']."<br />";
                                         echo "Found message in ".htmlspecialchars($cl, ENT_QUOTES)." Link Table.....";
-                                        $del_stmt1 = mysqli_prepare($link, "DELETE FROM `".$cl."_links` WHERE `id` = ?");
-                                        mysqli_stmt_bind_param($del_stmt1, "i", $id['id']);
-                                        if(mysqli_stmt_execute($del_stmt1))
+                                        $del_stmt1 = $link->prepare("DELETE FROM ".$cl."_links WHERE id = ?");
+                                        if($del_stmt1->execute([$id['id']]))
                                         {echo "Removed!<br />";}
                                         else{echo "Failed to Remove<br />";}
                                         $cl_c++;
                                     }else{echo "none<br />";}
                                     echo "<hr />";
                                 }
-                                mysqli_close($link);
+                                $link = null;
                                 if(!$cl_c){echo "<br /><br />Couldnt Find Any Clients with Custom Message [$del_esc]<br />";}
                                 else{echo "<br /><br />Found [$cl_c] Clients with Custom Message [$del_esc].<br />";}
                                 #remove Custom message
-                                $del_stmt2 = $conn->prepare("DELETE FROM `rss_feeds` WHERE `id` = ?");
-                                $del_stmt2->bind_param("i", $del);
-                                if($del_stmt2->execute())
+                                $del_stmt2 = $conn->prepare("DELETE FROM rss_feeds WHERE id = ?");
+                                if($del_stmt2->execute([$del]))
                                 {
                                     echo "Removed message [$del_esc].";
                                     ?>
@@ -963,7 +953,7 @@ function admin_panel($usr, $func, $proto)
                                     <?php
                                 }else
                                 {
-                                    echo "Failed to Remove message [$del_esc].<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                                    echo "Failed to Remove message [$del_esc].<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                                 }
                             }
                         }else
@@ -973,11 +963,10 @@ function admin_panel($usr, $func, $proto)
                                 $url = $_POST['body'][$key];
                                 $name = $_POST['name'][$key];
                                 $maxlines = (int)$_POST['maxlines'][$key];
-                                $stmt = $conn->prepare("UPDATE `rss_feeds` SET `name` = ?, `url` = ?, `maxlines` = ? WHERE `id` = ?");
-                                $stmt->bind_param("ssii", $name, $url, $maxlines, $id);
+                                $stmt = $conn->prepare("UPDATE rss_feeds SET name = ?, url = ?, maxlines = ? WHERE id = ?");
                                 $id_esc = htmlspecialchars((string)$id, ENT_QUOTES);
                                 $name_esc = htmlspecialchars((string)$name, ENT_QUOTES);
-                                if($stmt->execute())
+                                if($stmt->execute([$name, $url, $maxlines, $id]))
                                 {
                                     echo "Updated Feed [$id_esc] ($name_esc).";
                                     ?>
@@ -987,7 +976,7 @@ function admin_panel($usr, $func, $proto)
                                     <?php
                                 }else
                                 {
-                                    echo "Failed to Update Feed [$id_esc] ($name_esc).<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                                    echo "Failed to Update Feed [$id_esc] ($name_esc).<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                                 }
                             }
                         }
@@ -1036,12 +1025,13 @@ function admin_panel($usr, $func, $proto)
                         <th>+/-</th><th>Name</th><th>Max lines</th><th>RSS Feed URL</th><th>Options</th>
                     </tr>
                     <?php
-                        $link = mysqli_connect($server, $username, $password, $db);
-                        $result = mysqli_query($link, "SELECT * FROM `rss_feeds` ORDER by `name` ASC");
-                        if(mysqli_num_rows($result))
+                        $link = db_connect($server, $username, $password, $db, $driver);
+                        $result = $link->query("SELECT * FROM rss_feeds ORDER by name ASC");
+                        $rss_all = $result->fetchAll(PDO::FETCH_ASSOC);
+                        if(count($rss_all))
                         {
                             $tablerowid=0;
-                            while($links = mysqli_fetch_array($result, MYSQLI_ASSOC))
+                            foreach($rss_all as $links)
                             {
                                 $rss_id = (int)$links['id'];
                                 $rss_name = htmlspecialchars($links['name'], ENT_QUOTES);
@@ -1162,9 +1152,8 @@ function admin_panel($usr, $func, $proto)
                         $body = @filter_input(INPUT_POST, 'body_n', FILTER_SANITIZE_SPECIAL_CHARS);
                         $name = @filter_input(INPUT_POST, 'name_n', FILTER_SANITIZE_SPECIAL_CHARS);
                         $wrapper = (int)@filter_input(INPUT_POST, 'wrapper', FILTER_SANITIZE_SPECIAL_CHARS);
-                        $stmt = $conn->prepare("INSERT INTO `c_messages` (`name`, `body`, `wrapper`) VALUES (?, ?, ?)");
-                        $stmt->bind_param("ssi", $name, $body, $wrapper);
-                        if($stmt->execute())
+                        $stmt = $conn->prepare("INSERT INTO c_messages (name, body, wrapper) VALUES (?, ?, ?)");
+                        if($stmt->execute([$name, $body, $wrapper]))
                         {
                             echo "Updated message.";
                             ?>
@@ -1174,7 +1163,7 @@ function admin_panel($usr, $func, $proto)
                             <?php
                         }else
                         {
-                            echo "Failed to update message<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                            echo "Failed to update message<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                         }
                         break;
                     case "edit_messg":
@@ -1194,53 +1183,48 @@ function admin_panel($usr, $func, $proto)
                                 $del_esc = htmlspecialchars($del, ENT_QUOTES);
                                 #Check Emerg for Custom messages
                                 $search = $reg_url."html/template.php?type=c_message&id=$del";
-                                $stmt = $conn->prepare("SELECT id FROM `emerg` WHERE `url` = ?");
-                                $stmt->bind_param("s", $search);
-                                $stmt->execute();
-                                $id = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                $stmt = $conn->prepare("SELECT id FROM emerg WHERE url = ?");
+                                $stmt->execute([$search]);
+                                $id = $stmt->fetch(PDO::FETCH_ASSOC);
                                 if(!empty($id['id']))
                                 {
                                     echo "Found message in Emergency Table.....";
-                                    $del_stmt = $conn->prepare("DELETE FROM `emerg` WHERE `id` = ?");
-                                    $del_stmt->bind_param("i", $id['id']);
-                                    if($del_stmt->execute())
+                                    $del_stmt = $conn->prepare("DELETE FROM emerg WHERE id = ?");
+                                    if($del_stmt->execute([$id['id']]))
                                     {echo "Removed!<br />";}
                                     else{echo "Failed to Remove<br />";}
                                 }else{echo "Custom Message [$del_esc] was not in the Emergency Table<br />";}
                                 #Gather client ids list.
-                                $result = $conn->query("SELECT client_name FROM `allowed_clients`", MYSQLI_STORE_RESULT);
+                                $result = $conn->query("SELECT client_name FROM allowed_clients");
                                 $cl_c = 0;
                                 #Check Client lists for Custom Messages
-                                $link = mysqli_connect($server, $username, $password, $db);
-                                while($clid = $result->fetch_array(MYSQLI_ASSOC))
+                                $link = db_connect($server, $username, $password, $db, $driver);
+                                while($clid = $result->fetch(PDO::FETCH_ASSOC))
                                 {
                                     $cl = $clid['client_name'];
                                     if(!is_safe_client_id($cl)){continue;}
                                     $like_pattern = '%c_message&id='.$del;
-                                    $stmt1 = mysqli_prepare($link, "SELECT id FROM `".$cl."_links` WHERE `url` LIKE ? LIMIT 1");
-                                    mysqli_stmt_bind_param($stmt1, "s", $like_pattern);
-                                    mysqli_stmt_execute($stmt1);
-                                    $id = mysqli_fetch_array(mysqli_stmt_get_result($stmt1), MYSQLI_ASSOC);
+                                    $stmt1 = $link->prepare("SELECT id FROM ".$cl."_links WHERE url LIKE ?");
+                                    $stmt1->execute([$like_pattern]);
+                                    $id = $stmt1->fetch(PDO::FETCH_ASSOC);
                                     if(!empty($id['id']))
                                     {
                                         echo (int)$id['id']."<br />";
                                         echo "Found message in ".htmlspecialchars($cl, ENT_QUOTES)." Link Table.....";
-                                        $del_stmt1 = mysqli_prepare($link, "DELETE FROM `".$cl."_links` WHERE `id` = ?");
-                                        mysqli_stmt_bind_param($del_stmt1, "i", $id['id']);
-                                        if(mysqli_stmt_execute($del_stmt1))
+                                        $del_stmt1 = $link->prepare("DELETE FROM ".$cl."_links WHERE id = ?");
+                                        if($del_stmt1->execute([$id['id']]))
                                         {echo "Removed!<br />";}
                                         else{echo "Failed to Remove<br />";}
                                         $cl_c++;
                                     }else{echo "none<br />";}
                                     echo "<hr />";
                                 }
-                                mysqli_close($link);
+                                $link = null;
                                 if(!$cl_c){echo "<br /><br />Couldnt Find Any Clients with Custom Message [$del_esc]<br />";}
                                 else{echo "<br /><br />Found [$cl_c] Clients with Custom Message [$del_esc].<br />";}
                                 #remove Custom message
-                                $del_stmt2 = $conn->prepare("DELETE FROM `c_messages` WHERE `id` = ?");
-                                $del_stmt2->bind_param("i", $del);
-                                if($del_stmt2->execute())
+                                $del_stmt2 = $conn->prepare("DELETE FROM c_messages WHERE id = ?");
+                                if($del_stmt2->execute([$del]))
                                 {
                                     echo "Removed message [$del_esc].";
                                     ?>
@@ -1250,7 +1234,7 @@ function admin_panel($usr, $func, $proto)
                                     <?php
                                 }else
                                 {
-                                    echo "Failed to Remove message [$del_esc].<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                                    echo "Failed to Remove message [$del_esc].<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                                 }
                             }
                         }else
@@ -1270,10 +1254,9 @@ function admin_panel($usr, $func, $proto)
                                 $id = (int)$_POST['id'][$key];
                                 $name = $_POST['name'][$key];
                                 $wrapper = (int)$_POST['wrapper'][$key];
-                                $stmt = $conn->prepare("UPDATE `c_messages` SET `name` = ?, `body` = ?, `wrapper` = ? WHERE `id` = ?");
-                                $stmt->bind_param("ssii", $name, $body, $wrapper, $id);
+                                $stmt = $conn->prepare("UPDATE c_messages SET name = ?, body = ?, wrapper = ? WHERE id = ?");
                                 $name_esc = htmlspecialchars((string)$name, ENT_QUOTES);
-                                if($stmt->execute())
+                                if($stmt->execute([$name, $body, $wrapper, $id]))
                                 {
                                     echo "Updated message [$id] ($name_esc).<br/>";
                                     ?>
@@ -1283,7 +1266,7 @@ function admin_panel($usr, $func, $proto)
                                     <?php
                                 }else
                                 {
-                                    echo "Failed to Update message [$id] ($name_esc).<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                                    echo "Failed to Update message [$id] ($name_esc).<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                                 }
                             }
                         }
@@ -1332,12 +1315,13 @@ function admin_panel($usr, $func, $proto)
                         <th style="width:1px;">+/-</th><th>Name</th><th>Message URL</th><th width="1px">Options</th>
                     </tr>
                     <?php
-                        $link = mysqli_connect($server, $username, $password, $db);
-                        $result = mysqli_query($link, "SELECT * FROM `c_messages` ORDER by `id` ASC");
-                        if(mysqli_num_rows($result))
+                        $link = db_connect($server, $username, $password, $db, $driver);
+                        $result = $link->query("SELECT * FROM c_messages ORDER by id ASC");
+                        $cm_all = $result->fetchAll(PDO::FETCH_ASSOC);
+                        if(count($cm_all))
                         {
                             $tablerowid=0;
-                            while($links = mysqli_fetch_array($result, MYSQLI_ASSOC))
+                            foreach($cm_all as $links)
                             {
                                 $cm_id = (int)$links['id'];
                                 $cm_name = htmlspecialchars($links['name'], ENT_QUOTES);
@@ -1453,9 +1437,9 @@ function admin_panel($usr, $func, $proto)
                 $client_get = @filter_input(INPUT_GET, 'client', FILTER_SANITIZE_SPECIAL_CHARS);
                 if(!$client_get)
                 {
-                    $result = $conn->query("SELECT `client_name` FROM `allowed_clients`", MYSQLI_STORE_RESULT);
+                    $result = $conn->query("SELECT client_name FROM allowed_clients");
                     $clients = array();
-                    while($links = $result->fetch_array(MYSQLI_ASSOC))
+                    while($links = $result->fetch(PDO::FETCH_ASSOC))
                     {
                         $clients[] = $links['client_name'];
                     }
@@ -1470,10 +1454,9 @@ function admin_panel($usr, $func, $proto)
                         <?php
                     foreach($clients as $client)
                     {
-                        $stmt1 = $conn->prepare("SELECT * FROM `friendly` WHERE `client` = ?");
-                        $stmt1->bind_param("s", $client);
-                        $stmt1->execute();
-                        $friendly = $stmt1->get_result()->fetch_array(MYSQLI_ASSOC);
+                        $stmt1 = $conn->prepare("SELECT * FROM friendly WHERE client = ?");
+                        $stmt1->execute([$client]);
+                        $friendly = $stmt1->fetch(PDO::FETCH_ASSOC);
                         $client_esc = htmlspecialchars($client, ENT_QUOTES);
                         ?>
                             <tr class="client_table_body">
@@ -1498,18 +1481,17 @@ function admin_panel($usr, $func, $proto)
                             {
                                 if(!is_safe_client_id($copy_client)){continue;}
                                 $fail = 0;
-                                $result = $conn->query("SELECT * FROM `".$copy_client."_links`", MYSQLI_STORE_RESULT);
+                                $result = $conn->query("SELECT * FROM ".$copy_client."_links");
                                 $links = array(); #get list of URLS from Client that you want to copy to
 
-                                while($client_links = $result->fetch_array(MYSQLI_ASSOC))
+                                while($client_links = $result->fetch(PDO::FETCH_ASSOC))
                                 {
                                     $links[] = $client_links['url']."~".$client_links['refresh'];
                                 }
                                 #lets get its friendly name
-                                $stmt = $conn->prepare("SELECT friendly FROM `friendly` where `client` = ?");
-                                $stmt->bind_param("s", $copy_client);
-                                $stmt->execute();
-                                $friendly = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                $stmt = $conn->prepare("SELECT friendly FROM friendly where client = ?");
+                                $stmt->execute([$copy_client]);
+                                $friendly = $stmt->fetch(PDO::FETCH_ASSOC);
                                 $friend = $friendly['friendly'] ?? $copy_client;
                                 $friend_esc = htmlspecialchars($friend, ENT_QUOTES);
                                 if(!empty($links[0]))
@@ -1517,9 +1499,8 @@ function admin_panel($usr, $func, $proto)
                                     $name = "Backup of URLS for $friend on ".date("F j, Y \a\t g:i a");
                                     $imp_links = implode("||", $links);
                                     $now = time();
-                                    $stmt = $conn->prepare("INSERT INTO `archive_links` (`client`, `urls`, `name`, `details`, `date`) VALUES (?, ?, ?, 'Automated backup.', ?)");
-                                    $stmt->bind_param("ssss", $copy_client, $imp_links, $name, $now);
-                                    if($stmt->execute())
+                                    $stmt = $conn->prepare("INSERT INTO archive_links (client, urls, name, details, date) VALUES (?, ?, ?, 'Automated backup.', ?)");
+                                    if($stmt->execute([$copy_client, $imp_links, $name, $now]))
                                     {
                                         echo "URLs for Client: $friend_esc have been backed up.<br /><br />\r\n";
                                     }else
@@ -1534,21 +1515,19 @@ function admin_panel($usr, $func, $proto)
                                 if(!$fail)
                                 {
                                     $ids = explode("|", $_POST['urls']);
-                                    if(!$conn->query("TRUNCATE TABLE `".$copy_client."_links`")){echo "Error Truncating table<br />".htmlspecialchars($conn->error, ENT_QUOTES);}
+                                    if(!db_truncate_table($conn, $driver, $copy_client."_links")){echo "Error Truncating table<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);}
                                     foreach($ids as $id)
                                     {
                                         $id_esc = htmlspecialchars($id, ENT_QUOTES);
                                         echo "Start Copy of ID: $id_esc for Client: $friend_esc<br />";
-                                        $stmt = $conn->prepare("SELECT * FROM `".$client_get."_links` where `id` = ?");
-                                        $stmt->bind_param("i", $id);
-                                        $stmt->execute();
-                                        $copy_link = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                        $stmt = $conn->prepare("SELECT * FROM ".$client_get."_links where id = ?");
+                                        $stmt->execute([$id]);
+                                        $copy_link = $stmt->fetch(PDO::FETCH_ASSOC);
                                         if($copy_link)
                                         {
-                                            $ins_stmt = $conn->prepare("INSERT INTO `".$copy_client."_links` (`url`, `disabled`, `refresh`) VALUES (?, 0, ?)");
-                                            $ins_stmt->bind_param("si", $copy_link['url'], $copy_link['refresh']);
+                                            $ins_stmt = $conn->prepare("INSERT INTO ".$copy_client."_links (url, disabled, refresh) VALUES (?, 0, ?)");
                                         }
-                                        if(!$copy_link || !$ins_stmt->execute())
+                                        if(!$copy_link || !$ins_stmt->execute([$copy_link['url'], $copy_link['refresh']]))
                                         {
                                             echo "Failed to copy URL [$id_esc] to client: $friend_esc.<br /><br />";
                                         }else
@@ -1581,11 +1560,10 @@ function admin_panel($usr, $func, $proto)
                             <td>
                                 <select name="copy_clients[]" style="width:100%;" size="10" multiple="multiple">
                             <?php
-                            $stmt = $conn->prepare("SELECT * FROM `friendly` where `client` != ?");
-                            $stmt->bind_param("s", $client_get);
-                            $stmt->execute();
-                            $result = $stmt->get_result();
-                            while($all_clients = $result->fetch_array(MYSQLI_ASSOC))
+                            $stmt = $conn->prepare("SELECT * FROM friendly where client != ?");
+                            $stmt->execute([$client_get]);
+                            $result = $stmt;
+                            while($all_clients = $result->fetch(PDO::FETCH_ASSOC))
                             {
                                 ?><option value="<?php echo htmlspecialchars($all_clients['client'], ENT_QUOTES);?>"><?php echo htmlspecialchars($all_clients['friendly'], ENT_QUOTES);?></option><?php
                             }
@@ -1647,8 +1625,8 @@ function admin_panel($usr, $func, $proto)
                             <td>
                                 <select name="saved" style="width:100%;" size="10">
                             <?php
-                            $result = $conn->query("SELECT * FROM `saved_lists`", MYSQLI_STORE_RESULT);
-                            while($all_clients = $result->fetch_array(MYSQLI_ASSOC))
+                            $result = $conn->query("SELECT * FROM saved_lists");
+                            while($all_clients = $result->fetch(PDO::FETCH_ASSOC))
                             {
                                 ?><option value="<?php echo (int)$all_clients['id'];?>"><?php echo htmlspecialchars($all_clients['name'], ENT_QUOTES);?></option><?php
                             }
@@ -1675,24 +1653,22 @@ function admin_panel($usr, $func, $proto)
                                     foreach($remove_urls as $url)
                                     {
                                         $url_esc = htmlspecialchars((string)$url, ENT_QUOTES);
-                                        $stmt = $conn->prepare("SELECT * FROM `".$client_get."_links` WHERE `id` = ?");
-                                        $stmt->bind_param("i", $url);
-                                        $stmt->execute();
-                                        $link = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                        $stmt = $conn->prepare("SELECT * FROM ".$client_get."_links WHERE id = ?");
+                                        $stmt->execute([$url]);
+                                        $link = $stmt->fetch(PDO::FETCH_ASSOC);
                                         if(!$link)
                                         {
                                             echo "URL Does not Exsist any more.<br />";
                                             continue;
                                         }
-                                        $del_stmt = $conn->prepare("DELETE FROM `".$client_get."_links` WHERE `id` = ?");
-                                        $del_stmt->bind_param("i", $url);
-                                        if($del_stmt->execute())
+                                        $del_stmt = $conn->prepare("DELETE FROM ".$client_get."_links WHERE id = ?");
+                                        if($del_stmt->execute([$url]))
                                         {
                                             echo "Removed Link [$url_esc] from ($freindly)'s list.<br />";
                                             $urls[] = $link['url']."~".$link['refresh'];
                                         }else
                                         {
-                                            echo "Failed to Remove Link [$url_esc] from ($freindly)'s list.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                                            echo "Failed to Remove Link [$url_esc] from ($freindly)'s list.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                                         }
                                     }
                                     if(empty($urls))
@@ -1709,9 +1685,8 @@ function admin_panel($usr, $func, $proto)
                                         $time = time();
                                         $name = "Automated Backup on ".date("F j, Y, g:i a");
                                         $details = "Automated Backup of removed URLs $client_get";
-                                        $stmt = $conn->prepare("INSERT INTO `archive_links` (`client`, `urls`, `name`, `details`, `date`) VALUES (?, ?, ?, ?, ?)");
-                                        $stmt->bind_param("sssss", $client_get, $url_imp, $name, $details, $time);
-                                        if($stmt->execute())
+                                        $stmt = $conn->prepare("INSERT INTO archive_links (client, urls, name, details, date) VALUES (?, ?, ?, ?, ?)");
+                                        if($stmt->execute([$client_get, $url_imp, $name, $details, $time]))
                                         {
                                             echo "Backed up Links for ($client_get).";
                                     ?>
@@ -1721,7 +1696,7 @@ function admin_panel($usr, $func, $proto)
                                     <?php
                                         }else
                                         {
-                                            echo "Failed to Back up Links for ($client_get).<br />\r\n".$conn->error;
+                                            echo "Failed to Back up Links for ($client_get).<br />\r\n".db_error($conn);
                                         }
                                     }
                                 }
@@ -1733,14 +1708,13 @@ function admin_panel($usr, $func, $proto)
                                     {
                                         $id_esc = htmlspecialchars((string)$id, ENT_QUOTES);
                                         $r_val = (int)$refresh[$key];
-                                        $stmt = $conn->prepare("UPDATE `".$client_get."_links` set `refresh` = ? WHERE `id` = ?");
-                                        $stmt->bind_param("ii", $r_val, $id);
-                                        if($stmt->execute())
+                                        $stmt = $conn->prepare("UPDATE ".$client_get."_links set refresh = ? WHERE id = ?");
+                                        if($stmt->execute([$r_val, $id]))
                                         {
                                             echo "Updated URL [$id_esc] Refresh Time on Client ($client_get).<br />\r\n";
                                         }else
                                         {
-                                            echo "Failed to update URL [$id_esc] status on Client ($client_get).<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                                            echo "Failed to update URL [$id_esc] status on Client ($client_get).<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                                         }
                                     }
                                     ?>
@@ -1758,21 +1732,19 @@ function admin_panel($usr, $func, $proto)
                             foreach($url_exp as $url_)
                             {
                                 $url_ = trim($url_);
-                                $stmt = $conn->prepare("INSERT INTO `".$client_get."_links` (`url`, `disabled`, `refresh`) VALUES (?, 0, ?)");
-                                $stmt->bind_param("si", $url_, $refresh);
-                                if($stmt->execute())
+                                $stmt = $conn->prepare("INSERT INTO ".$client_get."_links (url, disabled, refresh) VALUES (?, 0, ?)");
+                                if($stmt->execute([$url_, $refresh]))
                                 {
                                     echo "Added: ".htmlspecialchars($url_, ENT_QUOTES)."<br />\r\n";
                                     $i++;
                                 }else
                                 {
-                                    echo "Failed to add URL....<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                                    echo "Failed to add URL....<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                                 }
                             }
-                            $stmt = $conn->prepare("SELECT friendly FROM `friendly` WHERE `client` = ?");
-                            $stmt->bind_param("s", $client_get);
-                            $stmt->execute();
-                            $friendly = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                            $stmt = $conn->prepare("SELECT friendly FROM friendly WHERE client = ?");
+                            $stmt->execute([$client_get]);
+                            $friendly = $stmt->fetch(PDO::FETCH_ASSOC);
                             if($i > 0)
                             {
                                 echo "Added ($i) New URL for Client. (".htmlspecialchars($friendly['friendly'] ?? '', ENT_QUOTES).")<br />";
@@ -1794,17 +1766,15 @@ function admin_panel($usr, $func, $proto)
                             $links = array();
                             foreach($url_exp as $id)
                             {
-                                $stmt = $conn->prepare("SELECT * FROM `".$client_get."_links` WHERE `id` = ?");
-                                $stmt->bind_param("i", $id);
-                                $stmt->execute();
-                                $link = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                $stmt = $conn->prepare("SELECT * FROM ".$client_get."_links WHERE id = ?");
+                                $stmt->execute([$id]);
+                                $link = $stmt->fetch(PDO::FETCH_ASSOC);
                                 if($link){$links[] = $link['url'].'~'.$link['refresh'];}
                             }
                             $urls_imp = implode("|", $links);
                             $time = time();
-                            $stmt = $conn->prepare("INSERT INTO `saved_lists` (`urls`, `name`, `details`, `date`) VALUES (?, ?, ?, ?)");
-                            $stmt->bind_param("ssss", $urls_imp, $name, $details, $time);
-                            if($stmt->execute())
+                            $stmt = $conn->prepare("INSERT INTO saved_lists (urls, name, details, date) VALUES (?, ?, ?, ?)");
+                            if($stmt->execute([$urls_imp, $name, $details, $time]))
                             {
                                 echo "Saved List. (".htmlspecialchars((string)$name, ENT_QUOTES).")";
                                 ?>
@@ -1814,23 +1784,21 @@ function admin_panel($usr, $func, $proto)
                                 <?php
                             }else
                             {
-                                echo "Failed to save list....<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                                echo "Failed to save list....<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                             }
                             break;
                         case "save_append":
                             $urls_imp = filter_input(INPUT_POST, 'urls', FILTER_SANITIZE_SPECIAL_CHARS);
                             $saved = (int)filter_input(INPUT_POST, 'saved', FILTER_SANITIZE_SPECIAL_CHARS);
 
-                            $stmt = $conn->prepare("SELECT * FROM `saved_lists` WHERE `id` = ?");
-                            $stmt->bind_param("i", $saved);
-                            $stmt->execute();
-                            $saved_array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                            $stmt = $conn->prepare("SELECT * FROM saved_lists WHERE id = ?");
+                            $stmt->execute([$saved]);
+                            $saved_array = $stmt->fetch(PDO::FETCH_ASSOC);
 
                             $urls_imp = ($saved_array['urls'] ?? '')."|".$urls_imp;
                             $time = time();
-                            $stmt = $conn->prepare("UPDATE `saved_lists` SET `urls`= ?, `date`= ? WHERE `id` = ?");
-                            $stmt->bind_param("sii", $urls_imp, $time, $saved);
-                            if($stmt->execute())
+                            $stmt = $conn->prepare("UPDATE saved_lists SET urls= ?, date= ? WHERE id = ?");
+                            if($stmt->execute([$urls_imp, $time, $saved]))
                             {
                                 echo "Updated List.";
                                 ?>
@@ -1840,7 +1808,7 @@ function admin_panel($usr, $func, $proto)
                                 <?php
                             }else
                             {
-                                echo "Failed to update list.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                                echo "Failed to update list.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                             }
                             break;
                         case "restore":
@@ -1849,18 +1817,17 @@ function admin_panel($usr, $func, $proto)
                             $url_exp = explode("|", $urls_imp);
                             $urls = array();
                             $friendly = htmlspecialchars(gen_friendly($client_get), ENT_QUOTES);
-                            $result = $conn->query("SELECT * FROM `".$client_get."_links`", MYSQLI_STORE_RESULT);
-                            while($link = $result->fetch_array(MYSQLI_ASSOC))
+                            $result = $conn->query("SELECT * FROM ".$client_get."_links");
+                            while($link = $result->fetch(PDO::FETCH_ASSOC))
                             {
-                                $del_stmt = $conn->prepare("DELETE FROM `".$client_get."_links` WHERE `id` = ?");
-                                $del_stmt->bind_param("i", $link['id']);
-                                if($del_stmt->execute())
+                                $del_stmt = $conn->prepare("DELETE FROM ".$client_get."_links WHERE id = ?");
+                                if($del_stmt->execute([$link['id']]))
                                 {
                                     echo "Removed Link [".(int)$link['id']."] from ($friendly)'s list.<br />";
                                     $urls[] = $link['url']."~".$link['refresh'];
                                 }else
                                 {
-                                    echo "Failed to Remove Link [".(int)$link['id']."] from ($friendly)'s list.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                                    echo "Failed to Remove Link [".(int)$link['id']."] from ($friendly)'s list.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                                 }
                             }
                             if(!empty($urls))
@@ -1869,14 +1836,13 @@ function admin_panel($usr, $func, $proto)
                                 $time = time();
                                 $name = "Automated Backup on ".date("F j, Y, g:i a");
                                 $details = "Automated Backup of removed URLs $friendly";
-                                $stmt = $conn->prepare("INSERT INTO `archive_links` (`client`, `urls`, `name`, `details`, `date`) VALUES (?, ?, ?, ?, ?)");
-                                $stmt->bind_param("sssss", $client_get, $url_imp, $name, $details, $time);
-                                if($stmt->execute())
+                                $stmt = $conn->prepare("INSERT INTO archive_links (client, urls, name, details, date) VALUES (?, ?, ?, ?, ?)");
+                                if($stmt->execute([$client_get, $url_imp, $name, $details, $time]))
                                 {
                                     echo "Backed up Links for ($friendly).";
                                 }else
                                 {
-                                    echo "Failed to Back up Links for ($friendly).<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                                    echo "Failed to Back up Links for ($friendly).<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                                     $fail = 1;
                                 }
                             }else
@@ -1885,16 +1851,15 @@ function admin_panel($usr, $func, $proto)
                             }
                             if(!@$fail)
                             {
-                                if($conn->query("TRUNCATE TABLE `".$client_get."_links`"))
+                                if(db_truncate_table($conn, $driver, $client_get."_links"))
                                 {
                                     foreach($url_exp as $data)
                                     {
                                         $data_exp = explode("~", $data);
                                         $url = $data_exp[0];
                                         $refresh = (int)($data_exp[1] ?? 0);
-                                        $stmt = $conn->prepare("INSERT INTO `".$client_get."_links` (`url`,`disabled`, `refresh`) VALUES (?, 0, ?)");
-                                        $stmt->bind_param("si", $url, $refresh);
-                                        if($stmt->execute())
+                                        $stmt = $conn->prepare("INSERT INTO ".$client_get."_links (url,disabled, refresh) VALUES (?, 0, ?)");
+                                        if($stmt->execute([$url, $refresh]))
                                         {
                                             echo "Added URL<br />\r\n";
                                         }else
@@ -1909,15 +1874,14 @@ function admin_panel($usr, $func, $proto)
                                     <?php
                                 }else
                                 {
-                                    echo "Failed to truncate.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                                    echo "Failed to truncate.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                                 }
                             }
                             break;
                         case "remove":
                             $id = (int)filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
-                            $stmt = $conn->prepare("DELETE FROM `saved_lists` WHERE `id` = ?");
-                            $stmt->bind_param("i", $id);
-                            if($stmt->execute())
+                            $stmt = $conn->prepare("DELETE FROM saved_lists WHERE id = ?");
+                            if($stmt->execute([$id]))
                             {
                                 echo "Removed Saved List";
                                ?>
@@ -1927,7 +1891,7 @@ function admin_panel($usr, $func, $proto)
                             <?php
                             }else
                             {
-                                echo "Failed to Removed Saved List.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                                echo "Failed to Removed Saved List.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                             }
                             break;
                         default:
@@ -1962,8 +1926,8 @@ function admin_panel($usr, $func, $proto)
                 }
                 </script>
                     <?php
-                    $result = $conn->query("SELECT `emerg` FROM `settings` LIMIT 1", MYSQLI_STORE_RESULT);
-                    $settings = $result->fetch_array(MYSQLI_ASSOC);
+                    $result = $conn->query("SELECT emerg FROM settings");
+                    $settings = $result->fetch(PDO::FETCH_ASSOC);
                     ?>
                 <table border="1px" width="100%">
                     <tr class="client_table_head">
@@ -1987,12 +1951,13 @@ function admin_panel($usr, $func, $proto)
                         <th width="50px">Enabled?</th><th width="700px">URL</th><th width="90px">Refresh Time</th><th width="90px">Options</th>
                     </tr>
                     <?php
-                    $link = mysqli_connect($server, $username, $password, $db);
-                    $result1 = mysqli_query($link, "SELECT * FROM `emerg`");
-                    if(mysqli_num_rows($result1) > 0)
+                    $link = db_connect($server, $username, $password, $db, $driver);
+                    $result1 = $link->query("SELECT * FROM emerg");
+                    $emerg_all = $result1->fetchAll(PDO::FETCH_ASSOC);
+                    if(count($emerg_all) > 0)
                     {
                         ?><form name="client_edit" action="?func=update_emerg" method="POST"><?php
-                        while($emerg_links = mysqli_fetch_array($result1, MYSQLI_ASSOC))
+                        foreach($emerg_all as $emerg_links)
                         {
                             $emerg_url_esc = htmlspecialchars($emerg_links['url'], ENT_QUOTES);
                             ?>
@@ -2020,17 +1985,15 @@ function admin_panel($usr, $func, $proto)
                                 switch($query_['type'] ?? '')
                                 {
                                     case "rss":
-                                        $stmt2 = mysqli_prepare($link, "SELECT * FROM `rss_feeds` WHERE `id` = ?");
-                                        mysqli_stmt_bind_param($stmt2, "i", $id);
-                                        mysqli_stmt_execute($stmt2);
-                                        $rss = mysqli_fetch_array(mysqli_stmt_get_result($stmt2), MYSQLI_ASSOC);
+                                        $stmt2 = $link->prepare("SELECT * FROM rss_feeds WHERE id = ?");
+                                        $stmt2->execute([$id]);
+                                        $rss = $stmt2->fetch(PDO::FETCH_ASSOC);
                                         if($rss){echo " (".htmlspecialchars($rss['name'], ENT_QUOTES).")";}
                                         break;
                                     case "c_message":
-                                        $stmt2 = mysqli_prepare($link, "SELECT * FROM `c_messages` WHERE `id` = ?");
-                                        mysqli_stmt_bind_param($stmt2, "i", $id);
-                                        mysqli_stmt_execute($stmt2);
-                                        $c_mesg = mysqli_fetch_array(mysqli_stmt_get_result($stmt2), MYSQLI_ASSOC);
+                                        $stmt2 = $link->prepare("SELECT * FROM c_messages WHERE id = ?");
+                                        $stmt2->execute([$id]);
+                                        $c_mesg = $stmt2->fetch(PDO::FETCH_ASSOC);
                                         if($c_mesg){echo " (".htmlspecialchars($c_mesg['name'], ENT_QUOTES).")";}
                                         break;
                                 }
@@ -2121,9 +2084,8 @@ function admin_panel($usr, $func, $proto)
             if($perms['edit_emerg'])
             {
                 $toggle = (int)filter_input(INPUT_POST, 'toggle', FILTER_SANITIZE_SPECIAL_CHARS);
-                $stmt = $conn->prepare("UPDATE `settings` set `emerg` = ? WHERE `id` = 1");
-                $stmt->bind_param("i", $toggle);
-                if($stmt->execute())
+                $stmt = $conn->prepare("UPDATE settings set emerg = ? WHERE id = 1");
+                if($stmt->execute([$toggle]))
                 {
                     if($led_blink){emerg_blink($toggle);}
                     if($toggle){echo "Enabled";}else{echo "Disabled";}
@@ -2137,7 +2099,7 @@ function admin_panel($usr, $func, $proto)
                 {
                     echo "Failed to ";
                     if($toggle){echo "Enabled";}else{echo "Disabled";}
-                    echo "Global Emergency Messages<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                    echo "Global Emergency Messages<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                 }
             }else
             {
@@ -2162,9 +2124,8 @@ function admin_panel($usr, $func, $proto)
                     {
                         $id = (int)$id;
                         $url_t = (int)$_POST['url_t'][$key];
-                        $stmt = $conn->prepare("UPDATE `emerg` set `enabled` = ? WHERE `id` = ?");
-                        $stmt->bind_param("ii", $url_t, $id);
-                        if($stmt->execute())
+                        $stmt = $conn->prepare("UPDATE emerg set enabled = ? WHERE id = ?");
+                        if($stmt->execute([$url_t, $id]))
                         {
                             echo "Updated URL [$id].<br />";
                             ?>
@@ -2174,7 +2135,7 @@ function admin_panel($usr, $func, $proto)
                             <?php
                         }else
                         {
-                            echo "Failed to updated URL [$id].<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                            echo "Failed to updated URL [$id].<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                         }
                     }
                 }elseif(@$_POST['delete'] === 'Delete')
@@ -2191,9 +2152,8 @@ function admin_panel($usr, $func, $proto)
                     foreach($_POST['urls'] as $key=>$id)
                     {
                         $id = (int)$id;
-                        $stmt = $conn->prepare("DELETE FROM `emerg` WHERE `id` = ?");
-                        $stmt->bind_param("i", $id);
-                        if($stmt->execute())
+                        $stmt = $conn->prepare("DELETE FROM emerg WHERE id = ?");
+                        if($stmt->execute([$id]))
                         {
                             echo "Removed [$id].<br />";
                             ?>
@@ -2203,7 +2163,7 @@ function admin_panel($usr, $func, $proto)
                             <?php
                         }else
                         {
-                            echo "Failed to Remove [$id].<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                            echo "Failed to Remove [$id].<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                         }
                     }
                 }elseif(@$_POST['refresh'] === 'Update')
@@ -2212,9 +2172,8 @@ function admin_panel($usr, $func, $proto)
                     {
                         $id = (int)$id;
                         $refresh = (int)$_POST['refresh_t'][$key];
-                        $stmt = $conn->prepare("UPDATE `emerg` set `refresh` = ? WHERE `id` = ?");
-                        $stmt->bind_param("ii", $refresh, $id);
-                        if($stmt->execute())
+                        $stmt = $conn->prepare("UPDATE emerg set refresh = ? WHERE id = ?");
+                        if($stmt->execute([$refresh, $id]))
                         {
                             echo "Updated URL [$id] Refresh Time.";
                             ?>
@@ -2224,7 +2183,7 @@ function admin_panel($usr, $func, $proto)
                             <?php
                         }else
                         {
-                            echo "Failed to updated URL [$id] status<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                            echo "Failed to updated URL [$id] status<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                         }
                     }
                 }
@@ -2243,15 +2202,14 @@ function admin_panel($usr, $func, $proto)
                 foreach($url_exp as $url_)
                 {
                     $url_ = trim($url_);
-                    $stmt = $conn->prepare("INSERT INTO `emerg` (`url`, `enabled`, `refresh`) VALUES (?, 1, ?)");
-                    $stmt->bind_param("si", $url_, $refresh);
-                    if($stmt->execute())
+                    $stmt = $conn->prepare("INSERT INTO emerg (url, enabled, refresh) VALUES (?, 1, ?)");
+                    if($stmt->execute([$url_, $refresh]))
                     {
                         echo "Added: ".htmlspecialchars($url_, ENT_QUOTES)."<br />\r\n";
                         $i++;
                     }else
                     {
-                        echo "Failed to add URL....<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                        echo "Failed to add URL....<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                     }
                 }
                 if($i > 0)
@@ -2277,9 +2235,8 @@ function admin_panel($usr, $func, $proto)
                 $client_get = filter_input(INPUT_GET, 'client', FILTER_SANITIZE_SPECIAL_CHARS);
                 $client_name = filter_input(INPUT_POST, 'client_name', FILTER_SANITIZE_SPECIAL_CHARS);
                 $client_id = (int)filter_input(INPUT_POST, 'client_id', FILTER_SANITIZE_SPECIAL_CHARS);
-                $stmt = $conn->prepare("UPDATE `friendly` SET `friendly` = ? WHERE `id` = ?");
-                $stmt->bind_param("si", $client_name, $client_id);
-                if($stmt->execute())
+                $stmt = $conn->prepare("UPDATE friendly SET friendly = ? WHERE id = ?");
+                if($stmt->execute([$client_name, $client_id]))
                 {
                     echo "Renamed Client [$client_id] ".htmlspecialchars((string)$client_name, ENT_QUOTES).".";
                     ?>
@@ -2289,7 +2246,7 @@ function admin_panel($usr, $func, $proto)
                     <?php
                 }else
                 {
-                    echo "Failed to Rename Client [$client_id]<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                    echo "Failed to Rename Client [$client_id]<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                 }
             }else
             {
@@ -2299,9 +2256,8 @@ function admin_panel($usr, $func, $proto)
         case "client_led_set":
             $cl_id = filter_input(INPUT_POST, 'cl_id', FILTER_SANITIZE_SPECIAL_CHARS);
             $led_id = (int)filter_input(INPUT_POST, 'cl_led_id', FILTER_SANITIZE_SPECIAL_CHARS);
-            $stmt = $conn->prepare("UPDATE `allowed_clients` SET `led` = ? WHERE `client_name` = ?");
-            $stmt->bind_param("is", $led_id, $cl_id);
-            if($stmt->execute())
+            $stmt = $conn->prepare("UPDATE allowed_clients SET led = ? WHERE client_name = ?");
+            if($stmt->execute([$led_id, $cl_id]))
             {
                 echo "Updated LED Group to #$led_id<br/>";
                 ?>
@@ -2349,10 +2305,9 @@ function admin_panel($usr, $func, $proto)
                 }
                 </script>
                 <?php
-                $stmt = $conn->prepare("SELECT * FROM `friendly` WHERE `client` = ?");
-                $stmt->bind_param("s", $client_get);
-                $stmt->execute();
-                $friendly = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                $stmt = $conn->prepare("SELECT * FROM friendly WHERE client = ?");
+                $stmt->execute([$client_get]);
+                $friendly = $stmt->fetch(PDO::FETCH_ASSOC);
                 ?>
                 <table border="1px" align="center">
                     <tr valign="center" class="client_table_head">
@@ -2374,10 +2329,9 @@ function admin_panel($usr, $func, $proto)
                                         <?php
                                         if($led_blink)
                                         {
-                                            $stmt = $conn->prepare("SELECT led FROM `allowed_clients` WHERE `client_name` = ?");
-                                            $stmt->bind_param("s", $client_get);
-                                            $stmt->execute();
-                                            $led = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+                                            $stmt = $conn->prepare("SELECT led FROM allowed_clients WHERE client_name = ?");
+                                            $stmt->execute([$client_get]);
+                                            $led = $stmt->fetch(PDO::FETCH_ASSOC);
                                         ?>
                                         LED Group:<br/>
                                         <form name="client_led" action="?func=client_led_set" method="POST">
@@ -2420,11 +2374,12 @@ function admin_panel($usr, $func, $proto)
                         <th>URL</th><th>Set Refresh</th><th width="120px">Select</th>
                     </tr>
                     <?php
-                    $link = mysqli_connect($server, $username, $password, $db);
-                    $result1 = mysqli_query($link, "SELECT * FROM `".$client_get."_links` ORDER BY `url` ASC");
-                    if(mysqli_num_rows($result1) > 0)
+                    $link = db_connect($server, $username, $password, $db, $driver);
+                    $result1 = $link->query("SELECT * FROM ".$client_get."_links ORDER BY url ASC");
+                    $client_links_all = $result1->fetchAll(PDO::FETCH_ASSOC);
+                    if(count($client_links_all) > 0)
                     {
-                        while($links = mysqli_fetch_array($result1, MYSQLI_ASSOC))
+                        foreach($client_links_all as $links)
                         {
                             $link_url_esc = htmlspecialchars($links['url'], ENT_QUOTES);
                             ?>
@@ -2449,17 +2404,15 @@ function admin_panel($usr, $func, $proto)
                                 switch($query_['type'] ?? '')
                                 {
                                     case "rss":
-                                        $stmt2 = mysqli_prepare($link, "SELECT * FROM `rss_feeds` WHERE `id` = ?");
-                                        mysqli_stmt_bind_param($stmt2, "i", $id);
-                                        mysqli_stmt_execute($stmt2);
-                                        $rss = mysqli_fetch_array(mysqli_stmt_get_result($stmt2), MYSQLI_ASSOC);
+                                        $stmt2 = $link->prepare("SELECT * FROM rss_feeds WHERE id = ?");
+                                        $stmt2->execute([$id]);
+                                        $rss = $stmt2->fetch(PDO::FETCH_ASSOC);
                                         if($rss){echo " (".htmlspecialchars($rss['name'], ENT_QUOTES).")";}
                                         break;
                                     case "c_message":
-                                        $stmt2 = mysqli_prepare($link, "SELECT * FROM `c_messages` WHERE `id` = ?");
-                                        mysqli_stmt_bind_param($stmt2, "i", $id);
-                                        mysqli_stmt_execute($stmt2);
-                                        $c_mesg = mysqli_fetch_array(mysqli_stmt_get_result($stmt2), MYSQLI_ASSOC);
+                                        $stmt2 = $link->prepare("SELECT * FROM c_messages WHERE id = ?");
+                                        $stmt2->execute([$id]);
+                                        $c_mesg = $stmt2->fetch(PDO::FETCH_ASSOC);
                                         if($c_mesg){echo " (".htmlspecialchars($c_mesg['name'], ENT_QUOTES).")";}
                                         break;
                                 }
@@ -2540,9 +2493,9 @@ function admin_panel($usr, $func, $proto)
                         <th>+/-</th><th>Name</th><th>Date</th><th>Options</th>
                     </tr>
                 <?php
-                $result = $conn->query("SELECT * FROM `saved_lists` ORDER by `id` DESC", MYSQLI_STORE_RESULT);
+                $result = $conn->query("SELECT * FROM saved_lists ORDER by id DESC");
                 $tablerowid = 0;
-                while($client_arc = $result->fetch_array(MYSQLI_ASSOC))
+                while($client_arc = $result->fetch(PDO::FETCH_ASSOC))
                 {
                     $arc_urls_esc = htmlspecialchars($client_arc['urls'], ENT_QUOTES);
                     ?>
@@ -2610,12 +2563,11 @@ function admin_panel($usr, $func, $proto)
                         <th>+/-</th><th>Name</th><th>Date</th><th>Options</th>
                     </tr>
                 <?php
-                $stmt = $conn->prepare("SELECT * FROM `archive_links` WHERE `client` = ? ORDER by `date` ASC");
-                $stmt->bind_param("s", $client_get);
-                $stmt->execute();
-                $result = $stmt->get_result();
+                $stmt = $conn->prepare("SELECT * FROM archive_links WHERE client = ? ORDER by date ASC");
+                $stmt->execute([$client_get]);
+                $result = $stmt;
                 $tablerowid = 0;
-                while($client_arc = $result->fetch_array(MYSQLI_ASSOC))
+                while($client_arc = $result->fetch(PDO::FETCH_ASSOC))
                 {
                     $arc_urls_esc = htmlspecialchars($client_arc['urls'], ENT_QUOTES);
                     ?>
@@ -2680,9 +2632,8 @@ function admin_panel($usr, $func, $proto)
             {
                 $client_get = filter_input(INPUT_GET, 'client', FILTER_SANITIZE_SPECIAL_CHARS);
                 $id = (int)filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
-                $stmt = $conn->prepare("DELETE FROM `archive_links` WHERE `id` = ?");
-                $stmt->bind_param("i", $id);
-                if($stmt->execute())
+                $stmt = $conn->prepare("DELETE FROM archive_links WHERE id = ?");
+                if($stmt->execute([$id]))
                 {
                     echo "Removed Archived List";
                    ?>
@@ -2692,7 +2643,7 @@ function admin_panel($usr, $func, $proto)
                 <?php
                 }else
                 {
-                    echo "Failed to Removed Archived List.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                    echo "Failed to Removed Archived List.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                 }
 
             }else
@@ -2705,25 +2656,18 @@ function admin_panel($usr, $func, $proto)
             {
                 $friendly = filter_input(INPUT_POST, 'friendly', FILTER_SANITIZE_SPECIAL_CHARS);
                 $friendly_esc = htmlspecialchars((string)$friendly, ENT_QUOTES);
-                $client_ID = md5(random_int(0, PHP_INT_MAX).microtime());
-                $stmt = $conn->prepare("INSERT INTO `friendly` (`friendly`, `client`) VALUES (?, ?)");
-                $stmt->bind_param("ss", $friendly, $client_ID);
-                if($stmt->execute())
+                # This becomes a bare (unquoted) "<id>_links" table name - MySQL tolerates a
+                # leading digit there but SQL Server/SQLite don't, so it's prefixed with a
+                # letter to guarantee a valid identifier on every supported driver.
+                $client_ID = 'c'.md5(random_int(0, PHP_INT_MAX).microtime());
+                $stmt = $conn->prepare("INSERT INTO friendly (friendly, client) VALUES (?, ?)");
+                if($stmt->execute([$friendly, $client_ID]))
                 {
-                    $stmt2 = $conn->prepare("INSERT INTO `allowed_clients` (`client_name`) VALUES (?)");
-                    $stmt2->bind_param("s", $client_ID);
-                    if($stmt2->execute())
+                    $stmt2 = $conn->prepare("INSERT INTO allowed_clients (client_name) VALUES (?)");
+                    if($stmt2->execute([$client_ID]))
                     {
                         # $client_ID is always a 32-char hex md5, always a safe bare identifier here.
-                        $sql = "CREATE TABLE IF NOT EXISTS `".$client_ID."_links` (
-      `id` int(255) NOT NULL AUTO_INCREMENT,
-      `url` varchar(255) NOT NULL,
-      `disabled` tinyint(4) NOT NULL DEFAULT '0',
-      `refresh` int(5) NOT NULL DEFAULT '60',
-      PRIMARY KEY (`id`),
-      UNIQUE (`url`)
-    ) ENGINE=MyISAM  DEFAULT CHARSET=utf8 AUTO_INCREMENT=1";
-                        if($conn->query($sql))
+                        if(db_create_links_table($conn, $driver, $client_ID."_links"))
                         {
                             echo "Created link table for `$friendly_esc`<br />";
                             ?>
@@ -2733,15 +2677,15 @@ function admin_panel($usr, $func, $proto)
                             <?php
                         }else
                         {
-                            echo "Failed to create link table for `$friendly_esc`<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                            echo "Failed to create link table for `$friendly_esc`<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                         }
                     }else
                     {
-                        echo "Failed to insert into `allowed_clients` table<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                        echo "Failed to insert into allowed_clients table<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                     }
                 }else
                 {
-                    echo "Failed to insert into `friendly` table<br />Probably a Duplicate name, check the SQL error below<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                    echo "Failed to insert into friendly table<br />Probably a Duplicate name, check the SQL error below<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                 }
             }else
             {
@@ -2765,10 +2709,11 @@ function admin_panel($usr, $func, $proto)
                         ?><th>Permissions</th><th>Options</th>
                     </tr>
                     <?php
-                    $result = $conn->query("SELECT * FROM allowed_users WHERE `username` != 'unsadmin'", MYSQLI_STORE_RESULT);
-                    if($result->num_rows > 0)
+                    $result = $conn->query("SELECT * FROM allowed_users WHERE username != 'unsadmin'");
+                    $allowed_users_all = $result->fetchAll(PDO::FETCH_ASSOC);
+                    if(count($allowed_users_all) > 0)
                     {
-                        while($array = $result->fetch_array(MYSQLI_ASSOC))
+                        foreach($allowed_users_all as $array)
                         {
                         ?>
                     <tr class="client_table_body">
@@ -2776,11 +2721,10 @@ function admin_panel($usr, $func, $proto)
                                 <?php echo htmlspecialchars($array['username'], ENT_QUOTES);?>
                         </td>
                         <?php
-                        $link = mysqli_connect($server, $username, $password, $db);
-                        $stmt1 = mysqli_prepare($link, "SELECT id,password FROM `internal_users` WHERE `username` = ?");
-                        mysqli_stmt_bind_param($stmt1, "s", $array['username']);
-                        mysqli_stmt_execute($stmt1);
-                        $int_usr = mysqli_fetch_array(mysqli_stmt_get_result($stmt1), MYSQLI_ASSOC);
+                        $link = db_connect($server, $username, $password, $db, $driver);
+                        $stmt1 = $link->prepare("SELECT id,password FROM internal_users WHERE username = ?");
+                        $stmt1->execute([$array['username']]);
+                        $int_usr = $stmt1->fetch(PDO::FETCH_ASSOC);
                         if(empty($int_usr['password']))
                         {?>
                         <td align="Center">
@@ -2922,8 +2866,8 @@ function admin_panel($usr, $func, $proto)
                                     <td align="Center">
                                         <form action="?func=edit_user&set=reset_pwd" method="POST">
                                             <?php
-                                            $result = $conn->query("SELECT id FROM `internal_users` WHERE `username` = 'unsadmin' LIMIT 1", MYSQLI_STORE_RESULT);
-                                            $admusr = $result->fetch_array(MYSQLI_ASSOC);
+                                            $result = $conn->query("SELECT id FROM internal_users WHERE username = 'unsadmin'");
+                                            $admusr = $result->fetch(PDO::FETCH_ASSOC);
                                             ?>
                                             <input type="hidden" name="id" value="<?php echo (int)($admusr['id'] ?? 0);?>" />
                                             <input type="password" name="password" value="" />
@@ -2933,8 +2877,8 @@ function admin_panel($usr, $func, $proto)
                                     <td>
                                         <form action="?func=toggle_builtin" method="POST">
                                          <?php
-                                        $result = $conn->query("SELECT * FROM settings LIMIT 1", MYSQLI_STORE_RESULT);
-                                        $array1 = $result->fetch_array(MYSQLI_ASSOC);
+                                        $result = $conn->query("SELECT * FROM settings");
+                                        $array1 = $result->fetch(PDO::FETCH_ASSOC);
                                         ?>
                                             <input type="hidden" name="toggle_admin" value="<?php if($array1['built_in_admin']){echo "0";}else{echo "1";}?>"/>
                                             <input type="submit" value="<?php if($array1['built_in_admin']){echo "Disable";}else{echo "Enable";}?> Built in Admin" />
@@ -2955,19 +2899,16 @@ function admin_panel($usr, $func, $proto)
             if($perms['edit_users'])
             {
                 $id = (int)filter_input(INPUT_POST, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
-                $stmt = $conn->prepare("SELECT username,domain FROM `allowed_users` WHERE `id` = ? LIMIT 1");
-                $stmt->bind_param("i", $id);
-                $stmt->execute();
-                $array1 = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
-                $del_stmt = $conn->prepare("DELETE FROM `allowed_users` WHERE `id` = ?");
-                $del_stmt->bind_param("i", $id);
-                if($del_stmt->execute())
+                $stmt = $conn->prepare("SELECT username,domain FROM allowed_users WHERE id = ?");
+                $stmt->execute([$id]);
+                $array1 = $stmt->fetch(PDO::FETCH_ASSOC);
+                $del_stmt = $conn->prepare("DELETE FROM allowed_users WHERE id = ?");
+                if($del_stmt->execute([$id]))
                 {
                     if(($array1['domain'] ?? '')=='')
                     {
-                        $del_stmt2 = $conn->prepare("DELETE FROM `internal_users` WHERE `username` = ?");
-                        $del_stmt2->bind_param("s", $array1['username']);
-                        if($del_stmt2->execute())
+                        $del_stmt2 = $conn->prepare("DELETE FROM internal_users WHERE username = ?");
+                        if($del_stmt2->execute([$array1['username']]))
                         {
                             echo "Removed Internal user.";
                             ?>
@@ -2977,7 +2918,7 @@ function admin_panel($usr, $func, $proto)
                             <?php
                         }else
                         {
-                            echo "Failed to Remove Internal User.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                            echo "Failed to Remove Internal User.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                             break;
                         }
                     }else
@@ -2991,7 +2932,7 @@ function admin_panel($usr, $func, $proto)
                     }
                 }else
                 {
-                    echo "Failed to remove user ($id).<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                    echo "Failed to remove user ($id).<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                 }
             }else
             {
@@ -3002,9 +2943,8 @@ function admin_panel($usr, $func, $proto)
             if($perms['edit_users'])
             {
                 $toggle_admin = (int)filter_input(INPUT_POST, 'toggle_admin', FILTER_SANITIZE_SPECIAL_CHARS);
-                $stmt = $conn->prepare("UPDATE `settings` SET `built_in_admin` = ? WHERE `id` = 1");
-                $stmt->bind_param("i", $toggle_admin);
-                if($stmt->execute())
+                $stmt = $conn->prepare("UPDATE settings SET built_in_admin = ? WHERE id = 1");
+                if($stmt->execute([$toggle_admin]))
                 {
                     if($toggle_admin){echo "Disabled";}else{echo "Enabled";}
                     echo " Built in Admin";
@@ -3015,7 +2955,7 @@ function admin_panel($usr, $func, $proto)
                     <?php
                 }else
                 {
-                    echo "Failed Update.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                    echo "Failed Update.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                 }
             }else
             {
@@ -3030,9 +2970,8 @@ function admin_panel($usr, $func, $proto)
                 if(!$internal_user)
                 {
                     $domain = @filter_input(INPUT_POST, 'domain_N', FILTER_SANITIZE_SPECIAL_CHARS);
-                    $stmt = $conn->prepare("INSERT INTO `allowed_users` (`username`, `domain`, `edit_urls`, `edit_emerg`, `edit_users`) VALUES (?, ?, 1, 0, 0)");
-                    $stmt->bind_param("ss", $user, $domain);
-                    if($stmt->execute())
+                    $stmt = $conn->prepare("INSERT INTO allowed_users (username, domain, edit_urls, edit_emerg, edit_users) VALUES (?, ?, 1, 0, 0)");
+                    if($stmt->execute([$user, $domain]))
                     {
                         echo "Added new User (".htmlspecialchars((string)$domain, ENT_QUOTES)."\\".htmlspecialchars((string)$user, ENT_QUOTES).").";
                         ?>
@@ -3042,19 +2981,17 @@ function admin_panel($usr, $func, $proto)
                         <?php
                     }else
                     {
-                        echo "Failed to add new User.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                        echo "Failed to add new User.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                     }
                 }else
                 {
                     $pwd = @filter_input(INPUT_POST, 'pwd_N', FILTER_SANITIZE_SPECIAL_CHARS);
                     $pwd_hash = password_hash((string)$pwd, PASSWORD_DEFAULT);
-                    $stmt = $conn->prepare("INSERT INTO `allowed_users` (`username`, `domain`, `edit_urls`, `edit_emerg`, `edit_users`) VALUES (?, '', 1, 0, 0)");
-                    $stmt->bind_param("s", $user);
-                    if($stmt->execute())
+                    $stmt = $conn->prepare("INSERT INTO allowed_users (username, domain, edit_urls, edit_emerg, edit_users) VALUES (?, '', 1, 0, 0)");
+                    if($stmt->execute([$user]))
                     {
-                        $stmt2 = $conn->prepare("INSERT INTO `internal_users` (`username`, `password`, `disabled`, `failed`) VALUES (?, ?, 0, 0)");
-                        $stmt2->bind_param("ss", $user, $pwd_hash);
-                        if($stmt2->execute())
+                        $stmt2 = $conn->prepare("INSERT INTO internal_users (username, password, disabled, failed) VALUES (?, ?, 0, 0)");
+                        if($stmt2->execute([$user, $pwd_hash]))
                         {
                             echo "Added new Internal User (".htmlspecialchars((string)$user, ENT_QUOTES).").";
                             ?>
@@ -3064,11 +3001,11 @@ function admin_panel($usr, $func, $proto)
                             <?php
                         }else
                         {
-                            echo "Failed to add new User.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                            echo "Failed to add new User.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                         }
                     }else
                     {
-                        echo "Failed to add new User.<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                        echo "Failed to add new User.<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                     }
                 }
             }else
@@ -3095,9 +3032,8 @@ function admin_panel($usr, $func, $proto)
                 {
                     list($post_field, $column, $label) = $toggle_fields[$set];
                     $value = (int)filter_input(INPUT_POST, $post_field, FILTER_SANITIZE_SPECIAL_CHARS);
-                    $stmt = $conn->prepare("UPDATE `allowed_users` SET `$column` = ? WHERE `id` = ?");
-                    $stmt->bind_param("ii", $value, $id);
-                    if($stmt->execute())
+                    $stmt = $conn->prepare("UPDATE allowed_users SET $column = ? WHERE id = ?");
+                    if($stmt->execute([$value, $id]))
                     {
                         echo "Updated $label field.";
                         ?>
@@ -3107,15 +3043,14 @@ function admin_panel($usr, $func, $proto)
                             <?php
                     }else
                     {
-                        echo "Failed Update.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                        echo "Failed Update.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                     }
                 }elseif($set === "reset_pwd")
                 {
                     $reset_pwd = filter_input(INPUT_POST, 'password', FILTER_SANITIZE_SPECIAL_CHARS);
                     $r_pwd = password_hash((string)$reset_pwd, PASSWORD_DEFAULT);
-                    $stmt = $conn->prepare("UPDATE `internal_users` SET `password` = ? WHERE `id` = ?");
-                    $stmt->bind_param("si", $r_pwd, $id);
-                    if($stmt->execute())
+                    $stmt = $conn->prepare("UPDATE internal_users SET password = ? WHERE id = ?");
+                    if($stmt->execute([$r_pwd, $id]))
                     {
                         echo "Changed User Password.";
                         ?>
@@ -3125,7 +3060,7 @@ function admin_panel($usr, $func, $proto)
                             <?php
                     }else
                     {
-                        echo "Failed to Update User Password.<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                        echo "Failed to Update User Password.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                     }
                 }
             }else
@@ -3153,16 +3088,14 @@ function admin_panel($usr, $func, $proto)
                         echo "Skipped invalid client [$id_esc]<br />\r\n";
                         continue;
                     }
-                    $stmt = $conn->prepare("DELETE FROM `allowed_clients` WHERE `client_name` = ?");
-                    $stmt->bind_param("s", $id);
-                    if($stmt->execute())
+                    $stmt = $conn->prepare("DELETE FROM allowed_clients WHERE client_name = ?");
+                    if($stmt->execute([$id]))
                     {
-                        $stmt2 = $conn->prepare("DELETE FROM `friendly` WHERE `client` = ?");
-                        $stmt2->bind_param("s", $id);
-                        if($stmt2->execute())
+                        $stmt2 = $conn->prepare("DELETE FROM friendly WHERE client = ?");
+                        if($stmt2->execute([$id]))
                         {
                             # $id is whitelisted by is_safe_client_id() above, safe as a table name here.
-                            if($conn->query("DROP TABLE `".$id."_links`"))
+                            if($conn->query("DROP TABLE ".$id."_links"))
                             {
                                 echo "Removed client [$id_esc]<br />\r\n";
                                 ?>
@@ -3172,15 +3105,15 @@ function admin_panel($usr, $func, $proto)
                             <?php
                             }else
                             {
-                                echo "Failed to drop table `".$id_esc."_links`<br />".htmlspecialchars($conn->error, ENT_QUOTES);
+                                echo "Failed to drop table ".$id_esc."_links<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
                             }
                         }else
                         {
-                            echo "Failed to remove client [$id_esc] from friendly<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                            echo "Failed to remove client [$id_esc] from friendly<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                         }
                     }else
                     {
-                        echo "Failed to remove client [$id_esc] from allowed list<br />\r\n".htmlspecialchars($conn->error, ENT_QUOTES);
+                        echo "Failed to remove client [$id_esc] from allowed list<br />\r\n".htmlspecialchars(db_error($conn), ENT_QUOTES);
                     }
                 }
             }else
@@ -3221,17 +3154,16 @@ function admin_panel($usr, $func, $proto)
                     $result = $conn->query("SELECT allowed_clients.id, friendly.friendly, friendly.client
 FROM allowed_clients, friendly
 WHERE friendly.client = allowed_clients.client_name
-ORDER BY friendly+0, friendly", MYSQLI_STORE_RESULT);
+ORDER BY friendly+0, friendly");
                     $rows = 0;
-                    $conn2 = mysqli_connect($server, $username, $password, $db);
-                    while($array = $result->fetch_array(MYSQLI_ASSOC))
+                    $conn2 = db_connect($server, $username, $password, $db, $driver);
+                    while($array = $result->fetch(PDO::FETCH_ASSOC))
                     {
                         $client = $array['client'];
                         $client_esc = htmlspecialchars($client, ENT_QUOTES);
-                        $stmt1 = mysqli_prepare($conn2, "SELECT * FROM `connections` WHERE `client` = ? ORDER by `last_conn` DESC LIMIT 1");
-                        mysqli_stmt_bind_param($stmt1, "s", $client);
-                        mysqli_stmt_execute($stmt1);
-                        $array2 = mysqli_fetch_array(mysqli_stmt_get_result($stmt1), MYSQLI_ASSOC);
+                        $stmt1 = $conn2->prepare("SELECT * FROM connections WHERE client = ? ORDER by last_conn DESC");
+                        $stmt1->execute([$client]);
+                        $array2 = $stmt1->fetch(PDO::FETCH_ASSOC);
                     ?>
                     <tr class="client_table_body">
                         <td align="center">
@@ -3355,11 +3287,11 @@ function is_safe_client_id($client)
 function gen_friendly($client)
 {
     include '../configs/conn.php';
-    $conn = new mysqli($server, $username, $password, $db);
-    $stmt = $conn->prepare("SELECT friendly FROM friendly WHERE `client` = ?");
-    $stmt->bind_param("s", $client);
-    $stmt->execute();
-    $friendly = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+    if(!isset($driver)){$driver = 'mysql';}
+    $conn = db_connect($server, $username, $password, $db, $driver);
+    $stmt = $conn->prepare("SELECT friendly FROM friendly WHERE client = ?");
+    $stmt->execute([$client]);
+    $friendly = $stmt->fetch(PDO::FETCH_ASSOC);
     return $friendly['friendly'] ?? '';
 }
 
@@ -3378,7 +3310,8 @@ function create_cookie($username_login)
     $admin_url = $GLOBALS['admin_url'];
     $reg_url = $GLOBALS['reg_url'];
     
-    $conn = new mysqli($server, $username, $password, $db);
+    if(!isset($driver)){$driver = 'mysql';}
+    $conn = db_connect($server, $username, $password, $db, $driver);
     $hash = bin2hex(random_bytes(16)); # session token - must be unguessable, hence a CSPRNG rather than mt_rand()
     if($timeout > 0){$time = time()+$timeout;}else{$time = 0;}
 
@@ -3387,9 +3320,8 @@ function create_cookie($username_login)
     if(setcookie("login_yes", $hash.":".$username_login, $time , $path, '', $SSL, 1))
     {
         echo "Cookie Set\r\n";
-        $stmt = $conn->prepare("INSERT INTO `hash_links` (`hash`, `time`, `user`) VALUES (?, ?, ?)");
-        $stmt->bind_param("sis", $hash, $time, $username_login);
-        $result = $stmt->execute();
+        $stmt = $conn->prepare("INSERT INTO hash_links (hash, time, username) VALUES (?, ?, ?)");
+        $result = $stmt->execute([$hash, $time, $username_login]);
         if($result)
         {
             echo "<h1>Logged In</h1>";
@@ -3399,7 +3331,7 @@ function create_cookie($username_login)
             return 1;
         }else
         {
-            echo $conn->error."\r\n";
+            echo db_error($conn)."\r\n";
             return 0;
         }
     }else
@@ -3414,28 +3346,27 @@ function check_archives($client)
     if(!is_safe_client_id($client)){return -1;}
     include "../configs/vars.php";
     include "../configs/conn.php";
-    if(!$conn = mysqli_connect($server, $username, $password, $db))
+    if(!isset($driver)){$driver = 'mysql';}
+    if(!$conn = db_connect($server, $username, $password, $db, $driver))
     {return -1;}
-    $stmt = mysqli_prepare($conn, "SELECT * FROM `archive_links` WHERE `client` = ? ORDER BY `date` ASC");
-    mysqli_stmt_bind_param($stmt, "s", $client);
-    if(!mysqli_stmt_execute($stmt))
+    $stmt = $conn->prepare("SELECT * FROM archive_links WHERE client = ? ORDER BY date ASC");
+    if(!$stmt->execute([$client]))
     {return 0;}
-    $result = mysqli_stmt_get_result($stmt);
-    $rows = mysqli_num_rows($result);
+    $archived = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $rows = count($archived);
     if($max_archives < $rows)
     {
-        while($arcs = mysqli_fetch_array($result, MYSQLI_ASSOC))
+        foreach($archived as $arcs)
         {
             if($rows+1 == $max_archives){break;}
-            $del_stmt = mysqli_prepare($conn, "DELETE FROM `archive_links` WHERE `id` = ?");
-            mysqli_stmt_bind_param($del_stmt, "i", $arcs['id']);
-            if(mysqli_stmt_execute($del_stmt))
+            $del_stmt = $conn->prepare("DELETE FROM archive_links WHERE id = ?");
+            if($del_stmt->execute([$arcs['id']]))
             {
                 echo "Removed row [".(int)$arcs['id']."]<br />";
                 $rows--;
             }else
             {
-                die(htmlspecialchars(mysqli_error($conn), ENT_QUOTES));
+                die(htmlspecialchars(db_error($conn), ENT_QUOTES));
             }
         }
         return 2;

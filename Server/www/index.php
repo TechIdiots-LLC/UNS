@@ -94,11 +94,12 @@ if($out != "")
                 echo '<?xml version="1.0" encoding="utf-8"?>
 ';
                 include "configs/conn.php";
-                $conn = new mysqli($server, $username, $password, $db);
-                $result = $conn->query("SELECT friendly.friendly,friendly.client FROM allowed_clients,friendly WHERE friendly.client = allowed_clients.client_name ORDER by friendly.friendly ASC", MYSQLI_STORE_RESULT);
+                if(!isset($driver)){$driver = 'mysql';}
+                $conn = db_connect($server, $username, $password, $db, $driver);
+                $stmt = $conn ? $conn->query("SELECT friendly.friendly,friendly.client FROM allowed_clients,friendly WHERE friendly.client = allowed_clients.client_name ORDER by friendly.friendly ASC") : false;
                 $NN=0;
                 $data = "<clients>\r\n";
-                while($clients = $result->fetch_array(MYSQLI_ASSOC))
+                while($stmt && ($clients = $stmt->fetch(PDO::FETCH_ASSOC)))
                 {
                     $client_esc = htmlspecialchars($clients['client'], ENT_QUOTES);
                     $friendly_esc = htmlspecialchars($clients['friendly'], ENT_QUOTES);
@@ -148,12 +149,13 @@ if($out != "")
     }else
     {
         include "configs/conn.php";
+        if(!isset($driver)){$driver = 'mysql';}
         $head = $scroll_code;
         $body = '<div align="center"><table width="75%"><tr><th>Clients</th></tr>';
-        $conn = new mysqli($server, $username, $password, $db);
-        $result = $conn->query("SELECT friendly.friendly,friendly.client FROM allowed_clients,friendly WHERE friendly.client = allowed_clients.client_name ORDER by friendly.friendly ASC", MYSQLI_STORE_RESULT);
+        $conn = db_connect($server, $username, $password, $db, $driver);
+        $stmt = $conn ? $conn->query("SELECT friendly.friendly,friendly.client FROM allowed_clients,friendly WHERE friendly.client = allowed_clients.client_name ORDER by friendly.friendly ASC") : false;
         $NN=0;
-        while($clients = $result->fetch_array(MYSQLI_ASSOC))
+        while($stmt && ($clients = $stmt->fetch(PDO::FETCH_ASSOC)))
         {
             $client_esc = htmlspecialchars($clients['client'], ENT_QUOTES);
             $friendly_esc = htmlspecialchars($clients['friendly'], ENT_QUOTES);
@@ -204,16 +206,16 @@ function get_client_led_id($client)
 {
     if(!is_safe_client_id($client)){return 0;}
     include "configs/conn.php";
-    $conn = new mysqli($server, $username, $password, $db);
-    if(mysqli_connect_errno())
+    if(!isset($driver)){$driver = 'mysql';}
+    $conn = db_connect($server, $username, $password, $db, $driver);
+    if(!$conn)
     {
-        printf("Connect failed: %s\n", mysqli_connect_error());
+        printf("Connect failed: %s\n", db_error($conn));
         exit();
     }
-    $stmt = $conn->prepare("SELECT led FROM `allowed_clients` where `client_name` = ?");
-    $stmt->bind_param("s", $client);
-    $stmt->execute();
-    $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+    $stmt = $conn->prepare("SELECT led FROM allowed_clients where client_name = ?");
+    $stmt->execute([$client]);
+    $array = $stmt->fetch(PDO::FETCH_ASSOC);
     if(empty($array['led']))
     {
         return 0;
@@ -227,60 +229,56 @@ function get_client_url($client)
 {
     $ret = array();
     include "configs/conn.php";
-    $conn = new mysqli($server, $username, $password, $db);
-    if (mysqli_connect_errno())
+    if(!isset($driver)){$driver = 'mysql';}
+    $conn = db_connect($server, $username, $password, $db, $driver);
+    if(!$conn)
     {
-        return array(mysqli_connect_error(), 0);
+        return array(db_error($conn), 0);
     }
     if(!is_safe_client_id($client))
     {
         return array("bad_client", 0);
     }
-    $stmt = $conn->prepare("SELECT * FROM `allowed_clients` where `client_name` = ?");
-    $stmt->bind_param("s", $client);
-    $stmt->execute();
-    $array = $stmt->get_result()->fetch_array(MYSQLI_ASSOC);
+    $stmt = $conn->prepare("SELECT * FROM allowed_clients where client_name = ?");
+    $stmt->execute([$client]);
+    $array = $stmt->fetch(PDO::FETCH_ASSOC);
     $cl_id = $array['id'] ?? 0;
 
     if(empty($array['client_name']))
     {
         return array("bad_client", 0);
     }
-    $result = $conn->query("SELECT * FROM `settings`", MYSQLI_STORE_RESULT);
-    $array = $result->fetch_array(MYSQLI_ASSOC);
+    $stmt = $conn->query("SELECT * FROM settings");
+    $array = $stmt->fetch(PDO::FETCH_ASSOC);
     $emerg_fl = $array['emerg'];
     if(!$emerg_fl)
     {
-        $stmt = $conn->prepare("SELECT * FROM `connections` where `client` = ? ORDER by `last_conn` DESC LIMIT 1");
-        $stmt->bind_param("s", $client);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        if($result && $result->num_rows > 0)
+        $stmt = $conn->prepare("SELECT * FROM connections where client = ? ORDER by last_conn DESC");
+        $stmt->execute([$client]);
+        $prev = $stmt->fetch(PDO::FETCH_ASSOC);
+        if($prev)
         {
-            $prev = $result->fetch_array(MYSQLI_ASSOC);
             $prev_url = $prev['last_url'];
             # $client is whitelisted to [A-Za-z0-9_]+ above, so it's safe to use as a table name here.
-            $stmt = $conn->prepare("SELECT * FROM `".$client."_links` where `disabled` != '1' AND `url` != ?");
-            $stmt->bind_param("s", $prev_url);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            while($array = $result->fetch_array(MYSQLI_ASSOC))
+            $stmt = $conn->prepare("SELECT * FROM ".$client."_links where disabled != '1' AND url != ?");
+            $stmt->execute([$prev_url]);
+            while($array = $stmt->fetch(PDO::FETCH_ASSOC))
             {
                 $ret[] = array($array['url'], $array['refresh']);
             }
 
             if(empty($ret[0]))
             {
-                $result = $conn->query("SELECT * FROM `".$client."_links` where `disabled` != '1'", MYSQLI_STORE_RESULT);
-                while($array = $result->fetch_array(MYSQLI_ASSOC))
+                $stmt = $conn->query("SELECT * FROM ".$client."_links where disabled != '1'");
+                while($array = $stmt->fetch(PDO::FETCH_ASSOC))
                 {
                     $ret[] = array($array['url'], $array['refresh']);
                 }
             }
         }else
         {
-            $result = $conn->query("SELECT * FROM `".$client."_links` where `disabled` != '1'", MYSQLI_STORE_RESULT);
-            while($array = $result->fetch_array(MYSQLI_ASSOC))
+            $stmt = $conn->query("SELECT * FROM ".$client."_links where disabled != '1'");
+            while($array = $stmt->fetch(PDO::FETCH_ASSOC))
             {
                 $ret[] = array($array['url'], $array['refresh']);
             }
@@ -288,12 +286,10 @@ function get_client_url($client)
 
     }else
     {
-        $stmt = $conn->prepare("SELECT * FROM `emerg` WHERE `cl_id` = ? OR `cl_id` = '0' AND `enabled` = '1'");
-        $stmt->bind_param("i", $cl_id);
-        $stmt->execute();
-        $result = $stmt->get_result();
+        $stmt = $conn->prepare("SELECT * FROM emerg WHERE cl_id = ? OR cl_id = '0' AND enabled = '1'");
+        $stmt->execute([$cl_id]);
 
-        while($array = $result->fetch_array(MYSQLI_ASSOC))
+        while($array = $stmt->fetch(PDO::FETCH_ASSOC))
         {
             $ret[] = array($array['url'], $array['refresh'], 1);
         }
@@ -309,11 +305,10 @@ function get_client_url($client)
     $time = time();
     $last_url = $ret1[0];
     check_conn_tbl($client);
-    $stmt = $conn->prepare("INSERT INTO `connections` (`client`, `last_conn`, `last_url`) VALUES (?, ?, ?)");
-    $stmt->bind_param("sis", $client, $time, $last_url);
-    if(!$stmt->execute())
+    $stmt = $conn->prepare("INSERT INTO connections (client, last_conn, last_url) VALUES (?, ?, ?)");
+    if(!$stmt->execute([$client, $time, $last_url]))
     {
-        return array($conn->error, 0);
+        return array(db_error($stmt), 0);
     }
 
     if($emerg_fl)
@@ -333,24 +328,21 @@ function check_conn_tbl($client)
     if(!is_safe_client_id($client)){return -1;}
     include "configs/vars.php";
     include "configs/conn.php";
-    if(!$conn = mysqli_connect($server, $username, $password, $db))
+    if(!isset($driver)){$driver = 'mysql';}
+    if(!$conn = db_connect($server, $username, $password, $db, $driver))
     {return -1;}
-    $stmt = $conn->prepare("SELECT * FROM `connections` WHERE `client` = ?");
-    $stmt->bind_param("s", $client);
-    if(!$stmt->execute()){return -1;}
-    $result = $stmt->get_result();
-    $rows = $result->num_rows;
-    if($max_conn_hist == $rows)
+    $stmt = $conn->prepare("SELECT * FROM connections WHERE client = ?");
+    if(!$stmt->execute([$client])){return -1;}
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if($max_conn_hist == count($rows))
     {
-        $stmt = $conn->prepare("SELECT id FROM `connections` WHERE `client` = ? ORDER BY `last_conn` ASC LIMIT 1");
-        $stmt->bind_param("s", $client);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        while($array = $result->fetch_array(MYSQLI_ASSOC))
+        $stmt = $conn->prepare("SELECT id FROM connections WHERE client = ? ORDER BY last_conn ASC");
+        $stmt->execute([$client]);
+        $oldest = $stmt->fetch(PDO::FETCH_ASSOC);
+        if($oldest)
         {
-            $del_stmt = $conn->prepare("DELETE FROM `connections` WHERE `id` = ?");
-            $del_stmt->bind_param("i", $array['id']);
-            if(!$del_stmt->execute()){return -1;}
+            $del_stmt = $conn->prepare("DELETE FROM connections WHERE id = ?");
+            if(!$del_stmt->execute([$oldest['id']])){return -1;}
         }
         return 1;
     }else

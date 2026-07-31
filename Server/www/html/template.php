@@ -15,28 +15,25 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-# Since PHP 8.1, mysqli throws on errors by default instead of returning false - restore the
-# old behavior so the if($stmt->execute()){...}else{...} checks below work as written.
-mysqli_report(MYSQLI_REPORT_OFF);
+include '../shared.php';
 
 $ID = filter_input(INPUT_GET, 'id', FILTER_SANITIZE_SPECIAL_CHARS);
 $type = @filter_input(INPUT_GET, 'type', FILTER_SANITIZE_SPECIAL_CHARS);
 include '../configs/vars.php';
 include '../configs/conn.php';
 date_default_timezone_set($TZ);
-$conn = new mysqli($server, $username, $password, $db);
+if(!isset($driver)){$driver = 'mysql';}
+$conn = db_connect($server, $username, $password, $db, $driver);
 
 switch($type)
 {
     case "rss":
         $template_head = $template_head_rss;
         $template_foot = $template_foot_rss;
-        $stmt = $conn->prepare("SELECT * FROM `rss_feeds` WHERE `id` = ?");
-        $stmt->bind_param("s", $ID);
-        if($stmt->execute())
+        $stmt = $conn ? $conn->prepare("SELECT * FROM rss_feeds WHERE id = ?") : false;
+        if($stmt && $stmt->execute([$ID]))
         {
-            $result = $stmt->get_result();
-            $array = $result->fetch_array(MYSQLI_ASSOC);
+            $array = $stmt->fetch(PDO::FETCH_ASSOC);
             if(!empty($array['id']))
             {
                 $max = $array['maxlines']+0;
@@ -58,18 +55,16 @@ switch($type)
         }else
         {
             $array['name'] = "RSS Feed Not Found";
-            $array['body'] = "You did something wrong.....<br />".htmlspecialchars($stmt->error, ENT_QUOTES);
+            $array['body'] = "You did something wrong.....<br />".htmlspecialchars(db_error($stmt ?: $conn), ENT_QUOTES);
         }
         break;
     case "c_message":
         $template_head = $template_head_cmsg;
         $template_foot = $template_foot_cmsg;
-        $stmt = $conn->prepare("SELECT * FROM `c_messages` WHERE `id` = ?");
-        $stmt->bind_param("s", $ID);
-        if($stmt->execute())
+        $stmt = $conn ? $conn->prepare("SELECT * FROM c_messages WHERE id = ?") : false;
+        if($stmt && $stmt->execute([$ID]))
         {
-            $result = $stmt->get_result();
-            $array = $result->fetch_array(MYSQLI_ASSOC);
+            $array = $stmt->fetch(PDO::FETCH_ASSOC);
             if(empty($array))
             {
                 $array['name'] = "Message Not Found";
@@ -82,7 +77,7 @@ switch($type)
         }else
         {
             $array['name'] = "Message Not Found";
-            $array['body'] = "You did something wrong.....<br />".htmlspecialchars($stmt->error, ENT_QUOTES);
+            $array['body'] = "You did something wrong.....<br />".htmlspecialchars(db_error($stmt ?: $conn), ENT_QUOTES);
         }
         break;
     default:
@@ -105,8 +100,11 @@ echo $template_head.
 function gen_rss($file, $max)
 {
     if(!$file){return -1;}
-    $file = file($file);
-    $RSS = xml2ary(@implode("\r\n", $file));
+    $file = @file($file);
+    # file() returns false (not an empty array) when the fetch fails (network error, 404, etc.) -
+    # implode() used to just warn on that in old PHP, but throws a TypeError as of PHP 8.
+    if($file === false){return -1;}
+    $RSS = xml2ary(implode("\r\n", $file));
     $x = 0;
     if(!@$RSS['rss'])
     {
