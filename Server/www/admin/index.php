@@ -336,105 +336,35 @@ function admin_panel($usr, $func, $proto)
     $stmt = $conn->prepare("SELECT * FROM allowed_users where username = ?");
     $stmt->execute([$usr]);
     $perms = $stmt->fetch(PDO::FETCH_ASSOC);
-    #############
-    $o=0;
-    if($perms['edit_urls'])
-    {
-        $nav_bar[] = '<td align="center" class="navtd">Edit Clients: <br /><font color="lawngreen">Allowed</font></td>';
-        $side_bar[] = '<p><a href="?" class="side_links">List Clients</a></p>';
-    }else
-    {
-        $nav_bar[] = '<td align="center" class="navtd">Edit Clients: <br /><font color="red">Denied</font></td>';
-        $side_bar[] = '';
-        $o++;
-    }
-    #############
-    if($perms['edit_emerg'])
-    {
-        $nav_bar[] = '<td align="center" class="navtd">Emergency Messages: <br /><font color="lawngreen">Allowed</font></td>';
-        $side_bar[] = '<p><a href="?func=edit_emerg" class="side_links">Emergency Messages</a></p>';
-    }else
-    {
-        $nav_bar[] = '<td align="center" class="navtd">Emergency Messages: <br /><font color="red">Denied</font></td>';
-        $side_bar[] = '';
-        $o++;
-    }
-    #############
-    if($perms['edit_users'])
-    {
-        $nav_bar[] = '<td align="center" class="navtd">Edit Users: <br /><font color="lawngreen">Allowed</font></td>';
-        $side_bar[] = '<p><a href="?func=view_users" class="side_links">User Permissions</a></p>';
-    }else
-    {
-        $nav_bar[] = '<td align="center" class="navtd">Edit Users: <br /><font color="red">Denied</font></td>';
-        $side_bar[] = '';
-        $o++;
-    }
-    #############
-    if($perms['c_messages'])
-    {
-        $nav_bar[] = '<td align="center" class="navtd">Custom Messages: <br /><font color="lawngreen">Allowed</font></td>';
-        $side_bar[] = '<p><a href="?func=c_messages" class="side_links">Custom Messages</a></p>';
-    }else
-    {
-        $nav_bar[] = '<td align="center" class="navtd">Custom Messages: <br /><font color="red">Denied</font></td>';
-        $side_bar[] = '';
-        $o++;
-    }
-    #############
-    if($perms['rss_feeds'])
-    {
-        $nav_bar[] = '<td align="center" class="navtd">RSS Feeds: <br /><font color="lawngreen">Allowed</font></td>';
-        $side_bar[] = '<p><a href="?func=rss_feeds" class="side_links">RSS Feeds</a></p>';
-    }else
-    {
-        $nav_bar[] = '<td align="center" class="navtd">RSS Feeds: <br /><font color="red">Denied</font></td>';
-        $side_bar[] = '';
-        $o++;
-    }
-    if($perms['edit_options'])
-    {
-        $nav_bar[] = '<td align="center" class="navtd">UNS Options: <br /><font color="lawngreen">Allowed</font></td>';
-        $side_bar[] = '<p><a href="?func=edit_options" class="side_links">UNS Options</a></p>';
-    }else
-    {
-        $nav_bar[] = '<td align="center" class="navtd">UNS Options: <br /><font color="red">Denied</font></td>';
-        $side_bar[] = '';
-        $o++;
-    }
-    $side_bar[] = '<p><a href="?func=logout" class="side_links">Logout ('.$usr.')</a></p>';
-    #############
+    # Menu definition. Each entry is a permission column, the label shown in the
+    # permission bar across the top, and the side-bar link it unlocks. This replaced six
+    # near-identical if/else blocks that concatenated the same HTML by hand.
+    $menu = array(
+        array('perm' => 'edit_urls',    'label' => 'Edit Clients',       'href' => '?',                  'text' => 'List Clients'),
+        array('perm' => 'edit_emerg',   'label' => 'Emergency Messages', 'href' => '?func=edit_emerg',   'text' => 'Emergency Messages'),
+        array('perm' => 'edit_users',   'label' => 'Edit Users',         'href' => '?func=view_users',   'text' => 'User Permissions'),
+        array('perm' => 'c_messages',   'label' => 'Custom Messages',    'href' => '?func=c_messages',   'text' => 'Custom Messages'),
+        array('perm' => 'rss_feeds',    'label' => 'RSS Feeds',          'href' => '?func=rss_feeds',    'text' => 'RSS Feeds'),
+        array('perm' => 'edit_options', 'label' => 'UNS Options',        'href' => '?func=edit_options', 'text' => 'UNS Options'),
+    );
 
-    if($o == count($nav_bar))
+    $nav_items   = array();
+    $side_links  = array();
+    foreach($menu as $item)
     {
-        $side_bar[0] = "No Permissions :-(";
+        $allowed = !empty($perms[$item['perm']]);
+        $nav_items[] = array('label' => $item['label'], 'allowed' => $allowed);
+        if($allowed){$side_links[] = array('href' => $item['href'], 'text' => $item['text']);}
     }
 
-    ?>
-    <table border="1px" width="100%">
-        <tr>
-            <td class="side_bar" valign="top" width="16%">
-                <?php
-                foreach($side_bar as $side)
-                {
-                    echo $side."\r\n";
-                }
-                ?>
-            </td>
-            <td valign="top" class="main_cell">
-                <table border="1px" width="100%">
-                    <tr class="nav_bar">
-                        
-                        
-    <?php
-    foreach($nav_bar as $nav)
-    {
-        echo $nav."\r\n";
-    }
-    ?>
-                    </tr>
-                </table>
-    <?php
+    # Side bar and permission bar come from partials/panel_open.tpl, driven by the $menu
+    # data above. The partial leaves its table open; panel_close.tpl closes it after the
+    # screen content below.
+    $panel_smarty = uns_smarty();
+    $panel_smarty->assign('side_links', $side_links);
+    $panel_smarty->assign('nav_items', $nav_items);
+    $panel_smarty->assign('username', $usr);
+    echo $panel_smarty->fetch('partials/panel_open.tpl');
 
     switch($func)
     {
@@ -3563,11 +3493,8 @@ ORDER BY friendly+0, friendly");
             }
             break;
     }
-?>
-            </td>
-        </tr>
-    </table>
-<?php
+
+    echo uns_smarty()->fetch('partials/panel_close.tpl');
 }
 
 
