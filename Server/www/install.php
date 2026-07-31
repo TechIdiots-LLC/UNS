@@ -674,6 +674,36 @@ if($installing)
                 ?></td>
             </tr>
             <tr class="pre">
+                <td>Template folders writable?</td>
+                <td><?php
+                    # Checked here, before anything is configured, rather than only during the
+                    # install. Smarty needs these on every page, and finding out afterwards
+                    # means the form has already been filled in and a database created.
+                    #
+                    # This creates them as a side effect, which is exactly what is wanted: on a
+                    # normal install they simply exist by the time the form is submitted.
+                    $pre_tpl = array(uns_data_dir('templates_c', true), uns_data_dir('templates_cache', true));
+                    $pre_bad = array();
+                    foreach($pre_tpl as $dir)
+                    {
+                        if(!is_dir($dir) || !is_writable($dir)){$pre_bad[] = $dir;}
+                    }
+                    if(!$pre_bad)
+                    {
+                        echo "<font color='limegreen'>GOOD!</font>"
+                            ."<br /><font size='1'>".htmlspecialchars(uns_path_for_shell(dirname($pre_tpl[0])), ENT_QUOTES)."</font>";
+                    }
+                    else
+                    {
+                        echo "<font color='red'>Cannot create or write ".count($pre_bad)." template folder"
+                            .(count($pre_bad) === 1 ? "" : "s").". Smarty compiles templates there on every"
+                            ." page, so fix this before installing:";
+                        foreach($pre_bad as $dir){echo uns_cmd_html(uns_cmd_make_dir($dir, uns_web_user()));}
+                        echo "</font>";
+                    }
+                ?></td>
+            </tr>
+            <tr class="pre">
                 <td>SQLite database safe from web download?</td>
                 <td><?php
                     # A SQLite database under configs/ sits inside the web root, so without a
