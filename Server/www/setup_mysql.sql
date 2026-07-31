@@ -176,3 +176,18 @@ CREATE TABLE IF NOT EXISTS `rss_feeds` (
   `maxlines` int(255) NOT NULL,
   KEY `id` (`id`)
 ) ENGINE=InnoDB  DEFAULT CHARSET=utf8 COLLATE=utf8_bin AUTO_INCREMENT=0;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `uns_config`
+--
+-- General key/value settings store. Newer settings live here rather than in
+-- configs/vars.php so they are backed up and restored with the database.
+--
+
+CREATE TABLE IF NOT EXISTS `uns_config` (
+  `cfg_key` varchar(64) NOT NULL,
+  `cfg_value` text NOT NULL,
+  PRIMARY KEY (`cfg_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;

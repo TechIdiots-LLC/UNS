@@ -321,6 +321,10 @@ function db_run_schema_file($conn, $path)
 {
     $sql = file_get_contents($path);
     if($sql === false){return false;}
+    # Drop "--" comment lines before splitting. A semicolon inside a comment would
+    # otherwise cut the following statement in half, and the halves fail silently -
+    # which is exactly how a table went missing from a fresh install once.
+    $sql = preg_replace('/^\s*--[^\n]*$/m', '', $sql);
     $statements = array_filter(array_map('trim', explode(';', $sql)), function($s){return $s !== '';});
     foreach($statements as $stmt)
     {
@@ -665,14 +669,18 @@ if($installing)
         }
         else
         {
-            echo "<li><b>Make configs/ read-only.</b> Nothing writes to it once the install is done."
-                .uns_cmd_html(uns_cmd_make_readonly($raw_cfg, $raw_user))."</li>";
+            echo "<li><b>Restrict configs/ to the web server.</b> It has to stay writable - saving the"
+                ." UNS Options page rewrites configs/vars.php - but nothing other than the web server"
+                ." needs any access to it."
+                .uns_cmd_html(uns_cmd_make_writable($raw_cfg, $raw_user))."</li>";
         }
     }
     else
     {
-        echo "<li><b>Make configs/ read-only.</b> Nothing writes to it once the install is done."
-            .uns_cmd_html(uns_cmd_make_readonly($raw_cfg, $raw_user))."</li>";
+        echo "<li><b>Restrict configs/ to the web server.</b> It has to stay writable - saving the"
+            ." UNS Options page rewrites configs/vars.php - but nothing other than the web server"
+            ." needs any access to it."
+            .uns_cmd_html(uns_cmd_make_writable($raw_cfg, $raw_user))."</li>";
     }
 
     echo "<li><b>Restrict the credentials file.</b> configs/conn.php holds your database login"

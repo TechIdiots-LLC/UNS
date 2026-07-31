@@ -108,3 +108,10 @@ CREATE TABLE rss_feeds (
   url VARCHAR(255) NOT NULL,
   maxlines INT NOT NULL
 );
+
+-- General key/value settings store, see setup_mysql.sql for notes.
+IF OBJECT_ID('uns_config', 'U') IS NULL
+CREATE TABLE uns_config (
+  cfg_key VARCHAR(64) NOT NULL PRIMARY KEY,
+  cfg_value NVARCHAR(MAX) NOT NULL
+);

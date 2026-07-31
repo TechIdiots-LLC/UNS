@@ -96,3 +96,9 @@ CREATE TABLE IF NOT EXISTS rss_feeds (
   url VARCHAR(255) NOT NULL,
   maxlines INTEGER NOT NULL
 );
+
+-- General key/value settings store, see setup_mysql.sql for notes.
+CREATE TABLE IF NOT EXISTS uns_config (
+  cfg_key VARCHAR(64) NOT NULL PRIMARY KEY,
+  cfg_value TEXT NOT NULL
+);

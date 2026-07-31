@@ -600,11 +600,25 @@ function admin_panel($usr, $func, $proto)
             break;
         case "edit_opt_proc":
             include ('../configs/vars.php');
+            # The current database settings, so this page can rewrite conn.php without the
+            # form having to re-supply every value. Without it $driver was out of scope and
+            # fell back to 'mysql' below, which silently broke SQLite and SQL Server installs
+            # the first time anyone saved the options page.
+            include ('../configs/conn.php');
+
             $sql_host = @filter_input(INPUT_POST, 'sql_host', FILTER_SANITIZE_ENCODED);
             $uns_sql_usr = @filter_input(INPUT_POST, 'uns_sql_usr', FILTER_SANITIZE_ENCODED);
             $uns_sql_pwd = @filter_input(INPUT_POST, 'uns_sql_pwd', FILTER_SANITIZE_SPECIAL_CHARS);
-            if($uns_sql_pwd == ""){die("You need to enter your UNS SQL password in order for the Configurator to finish.<br /><a onclick='history.back()'>Go back</a> and do it again.");}
             $db_name = @filter_input(INPUT_POST, 'db_name', FILTER_SANITIZE_ENCODED);
+
+            # A blank field means "leave this as it is", not "set it to empty". The password
+            # box is always rendered empty, so demanding a value here meant a SQLite install -
+            # which has no database password at all - could never save the options page, and a
+            # server install had to have its password retyped on every unrelated change.
+            if($sql_host === null || $sql_host === false || $sql_host === ''){$sql_host = isset($server) ? $server : '';}
+            if($uns_sql_usr === null || $uns_sql_usr === false || $uns_sql_usr === ''){$uns_sql_usr = isset($username) ? $username : '';}
+            if($uns_sql_pwd === null || $uns_sql_pwd === false || $uns_sql_pwd === ''){$uns_sql_pwd = isset($password) ? $password : '';}
+            if($db_name === null || $db_name === false || $db_name === ''){$db_name = isset($db) ? $db : '';}
             
             $hostname = html_entity_decode(@filter_input(INPUT_POST, 'hostname', FILTER_SANITIZE_SPECIAL_CHARS));
             $uns_name = html_entity_decode(@filter_input(INPUT_POST, 'uns_name', FILTER_SANITIZE_SPECIAL_CHARS));
@@ -626,6 +640,51 @@ function admin_panel($usr, $func, $proto)
             $portctl = html_entity_decode(@filter_input(INPUT_POST, 'portctl', FILTER_SANITIZE_SPECIAL_CHARS));
 
             $mysql_dump_binary = @filter_input(INPUT_POST, 'mysql_dump', FILTER_SANITIZE_ENCODED);
+
+            # Emergency monitor settings. The feed URL is a real URL, so it is validated
+            # rather than merely escaped - it gets fetched by a scheduled script, and only
+            # http/https should ever be requested.
+            $emerg_feed_url1 = trim((string)html_entity_decode(@filter_input(INPUT_POST, 'emerg_feed_url', FILTER_SANITIZE_SPECIAL_CHARS)));
+            if($emerg_feed_url1 !== '')
+            {
+                $scheme = strtolower((string)parse_url($emerg_feed_url1, PHP_URL_SCHEME));
+                if(!filter_var($emerg_feed_url1, FILTER_VALIDATE_URL) || !in_array($scheme, array('http', 'https'), true))
+                {
+                    echo "Emergency feed URL is not a valid http/https URL - leaving it unset.<br />";
+                    $emerg_feed_url1 = '';
+                }
+            }
+            $emerg_display_minutes1 = @filter_input(INPUT_POST, 'emerg_display_minutes', FILTER_SANITIZE_ENCODED)+0;
+            if($emerg_display_minutes1 < 1){$emerg_display_minutes1 = 30;}
+            $emerg_publish_message1 = @filter_input(INPUT_POST, 'emerg_publish_message', FILTER_SANITIZE_ENCODED) ? 1 : 0;
+            $emerg_allowed_status1 = trim((string)@filter_input(INPUT_POST, 'emerg_allowed_status', FILTER_SANITIZE_SPECIAL_CHARS));
+            if($emerg_allowed_status1 === ''){$emerg_allowed_status1 = 'Actual';}
+            $emerg_min_severity1 = (string)@filter_input(INPUT_POST, 'emerg_min_severity', FILTER_SANITIZE_SPECIAL_CHARS);
+            if(!in_array($emerg_min_severity1, array('Unknown', 'Minor', 'Moderate', 'Severe', 'Extreme'), true)){$emerg_min_severity1 = 'Unknown';}
+            $emerg_max_items1 = @filter_input(INPUT_POST, 'emerg_max_items', FILTER_SANITIZE_ENCODED)+0;
+            if($emerg_max_items1 < 1){$emerg_max_items1 = 5;}
+            $emerg_follow_cap_links1 = @filter_input(INPUT_POST, 'emerg_follow_cap_links', FILTER_SANITIZE_ENCODED) ? 1 : 0;
+
+            # These go in the uns_config table rather than vars.php, so they are covered by
+            # the database backup and readable by the scheduled monitor without it needing
+            # to read a PHP file out of the web root.
+            $emerg_cfg = array(
+                'emerg_feed_url'         => $emerg_feed_url1,
+                'emerg_display_minutes'  => $emerg_display_minutes1,
+                'emerg_publish_message'  => $emerg_publish_message1,
+                'emerg_allowed_status'   => $emerg_allowed_status1,
+                'emerg_min_severity'     => $emerg_min_severity1,
+                'emerg_max_items'        => $emerg_max_items1,
+                'emerg_follow_cap_links' => $emerg_follow_cap_links1,
+            );
+            $emerg_cfg_ok = true;
+            foreach($emerg_cfg as $cfg_k => $cfg_v)
+            {
+                if(!uns_config_set($conn, $driver, $cfg_k, $cfg_v)){$emerg_cfg_ok = false;}
+            }
+            echo $emerg_cfg_ok
+                ? "Saved emergency monitor settings.<br />"
+                : "Failed to save some emergency monitor settings: ".htmlspecialchars(db_error($conn), ENT_QUOTES)."<br />";
 
             # var_export() is used for every value below (rather than interpolating raw
             # strings into single-quoted PHP literals) - these files get written to disk and
@@ -853,6 +912,94 @@ function admin_panel($usr, $func, $proto)
                                 </td>
                                 <td>
                                     <input type="text" name="max_conns" style="width:100%" value="<?php echo $max_conn_hist;?>"/>
+                                </td>
+                            </tr>
+                            <?php
+                            # Settings for Scripts/EmergencyMonitor, read from the uns_config
+                            # table. The table is created on demand, so an install that predates
+                            # it simply shows the defaults here until the form is first saved.
+                            if(!isset($driver)){$driver = 'mysql';}
+                            $ef_cfg      = uns_config_all($conn, $driver);
+                            $ef_url      = isset($ef_cfg['emerg_feed_url']) ? $ef_cfg['emerg_feed_url'] : '';
+                            $ef_minutes  = isset($ef_cfg['emerg_display_minutes']) ? (int)$ef_cfg['emerg_display_minutes'] : 30;
+                            $ef_publish  = isset($ef_cfg['emerg_publish_message']) ? (int)$ef_cfg['emerg_publish_message'] : 1;
+                            $ef_status   = isset($ef_cfg['emerg_allowed_status']) ? $ef_cfg['emerg_allowed_status'] : 'Actual';
+                            $ef_severity = isset($ef_cfg['emerg_min_severity']) ? $ef_cfg['emerg_min_severity'] : 'Unknown';
+                            $ef_max      = isset($ef_cfg['emerg_max_items']) ? (int)$ef_cfg['emerg_max_items'] : 5;
+                            $ef_follow   = isset($ef_cfg['emerg_follow_cap_links']) ? (int)$ef_cfg['emerg_follow_cap_links'] : 1;
+                            ?>
+                            <tr class="client_table_head">
+                                <td colspan="2" align="center">Emergency Alert Monitor
+                                    <br /><font size="1">Used by the scheduled script in Scripts/EmergencyMonitor.
+                                    Leave the feed URL empty to switch it off.</font></td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>
+                                    Alert feed URL
+                                    <br /><font size="1">CAP, RSS or Atom - the format is detected automatically</font>
+                                </td>
+                                <td>
+                                    <input type="text" name="emerg_feed_url" style="width:100%" value="<?php echo htmlspecialchars($ef_url, ENT_QUOTES);?>"/>
+                                </td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>
+                                    Display time (minutes)
+                                    <br /><font size="1">Only used when the feed gives no expiry. CAP alerts carry their own.</font>
+                                </td>
+                                <td>
+                                    <input type="text" name="emerg_display_minutes" style="width:100%" value="<?php echo $ef_minutes;?>"/>
+                                </td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>
+                                    Publish the alert text to displays?
+                                    <br /><font size="1">Writes the alert into a custom message and points an emergency URL at it</font>
+                                </td>
+                                <td>
+                                    <input type="checkbox" name="emerg_publish_message" value="1" <?php if($ef_publish){echo "checked";}?>/>
+                                </td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>
+                                    CAP status values to act on
+                                    <br /><font size="1">Comma separated. Adding Test or Exercise lets drills take over displays.</font>
+                                </td>
+                                <td>
+                                    <input type="text" name="emerg_allowed_status" style="width:100%" value="<?php echo htmlspecialchars($ef_status, ENT_QUOTES);?>"/>
+                                </td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>
+                                    Minimum CAP severity
+                                </td>
+                                <td>
+                                    <select name="emerg_min_severity" style="width:100%">
+                                        <?php
+                                        foreach(array('Unknown', 'Minor', 'Moderate', 'Severe', 'Extreme') as $sev)
+                                        {
+                                            echo "<option value=\"".$sev."\"".($ef_severity === $sev ? " selected" : "").">".$sev."</option>";
+                                        }
+                                        ?>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>
+                                    Feed entries to check
+                                    <br /><font size="1">Several alerts can be in force at once, so more than the newest is checked</font>
+                                </td>
+                                <td>
+                                    <input type="text" name="emerg_max_items" style="width:100%" value="<?php echo $ef_max;?>"/>
+                                </td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>
+                                    Follow feed links to CAP documents?
+                                    <br /><font size="1">For feeds whose entries link to CAP rather than embedding it</font>
+                                </td>
+                                <td>
+                                    <input type="checkbox" name="emerg_follow_cap_links" value="1" <?php if($ef_follow){echo "checked";}?>/>
                                 </td>
                             </tr>
                             <tr class="client_table_body">

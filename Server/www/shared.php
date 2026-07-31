@@ -124,6 +124,89 @@ function db_create_links_table($conn, $driver, $table)
     }
     return $conn->exec($sql) !== false;
 }
+# --- Settings stored in the database ---------------------------------------
+#
+# configs/vars.php still holds the original settings, but anything added since lives
+# here instead: it is backed up and restored with the database, and reachable by any
+# process with database access rather than only by something that can read a PHP file
+# on the web server.
+#
+# UNS has no schema migration mechanism, so the table is created on demand the first
+# time it is used. Installs that predate it pick it up with no upgrade step - the same
+# approach db_create_links_table() already uses for the per-client link tables.
+
+function db_create_config_table($conn, $driver)
+{
+    switch($driver)
+    {
+        case 'sqlite':
+            $sql = "CREATE TABLE IF NOT EXISTS uns_config (
+                cfg_key VARCHAR(64) NOT NULL PRIMARY KEY,
+                cfg_value TEXT NOT NULL
+            )";
+            break;
+        case 'sqlsrv':
+            $sql = "IF OBJECT_ID('uns_config', 'U') IS NULL
+            CREATE TABLE uns_config (
+                cfg_key VARCHAR(64) NOT NULL PRIMARY KEY,
+                cfg_value NVARCHAR(MAX) NOT NULL
+            )";
+            break;
+        case 'mysql':
+        default:
+            $sql = "CREATE TABLE IF NOT EXISTS uns_config (
+                cfg_key varchar(64) NOT NULL,
+                cfg_value text NOT NULL,
+                PRIMARY KEY (cfg_key)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8";
+            break;
+    }
+    return $conn->exec($sql) !== false;
+}
+
+# Every setting in one round trip. The create-on-demand only runs once per request.
+function uns_config_all($conn, $driver)
+{
+    static $ensured = false;
+    if(!$ensured){db_create_config_table($conn, $driver); $ensured = true;}
+
+    $out = array();
+    $stmt = $conn->query("SELECT cfg_key, cfg_value FROM uns_config");
+    if(!$stmt){return $out;}
+    while($row = $stmt->fetch(PDO::FETCH_ASSOC))
+    {
+        $out[$row['cfg_key']] = $row['cfg_value'];
+    }
+    return $out;
+}
+
+function uns_config_get($conn, $driver, $key, $default = '')
+{
+    $all = uns_config_all($conn, $driver);
+    return array_key_exists($key, $all) ? $all[$key] : $default;
+}
+
+function uns_config_set($conn, $driver, $key, $value)
+{
+    static $ensured = false;
+    if(!$ensured){db_create_config_table($conn, $driver); $ensured = true;}
+
+    # SELECT then UPDATE/INSERT rather than a driver-specific upsert. Checking
+    # rowCount() after an UPDATE would not work either: MySQL reports 0 rows changed
+    # when the value is written back unchanged, which would trigger a duplicate INSERT.
+    $sel = $conn->prepare("SELECT cfg_key FROM uns_config WHERE cfg_key = ?");
+    $exists = false;
+    if($sel && $sel->execute(array($key))){$exists = (bool)$sel->fetch(PDO::FETCH_ASSOC);}
+
+    if($exists)
+    {
+        $upd = $conn->prepare("UPDATE uns_config SET cfg_value = ? WHERE cfg_key = ?");
+        return $upd ? $upd->execute(array((string)$value, $key)) : false;
+    }
+    $ins = $conn->prepare("INSERT INTO uns_config (cfg_key, cfg_value) VALUES (?, ?)");
+    return $ins ? $ins->execute(array($key, (string)$value)) : false;
+}
+
 # ----------------------------------------------------------------------------
 
 # Reads the app version from the VERSION file, so the version only needs updating in one
