@@ -3740,40 +3740,11 @@ function check_archives($client)
 
 function login_form($mesg)
 {
-?>
-<html>
-    <head>
-        <title>UNS Admin Panel</title>
-        <link rel="stylesheet" href="../configs/styles.css">
-    </head>
-    <body class="main_body">
-        <?php if($mesg != ""){ ?> <p align="center" style="color:red;"> <?php echo htmlspecialchars($mesg, ENT_QUOTES);?> </p> <?php } ?>
-    <form method="POST" action="?login=1">
-    <table class="navtd" align="center" border="1px" style="color:000; width:30%;">
-        <tr align="center" class="client_table_head">
-            <td>
-                USERNAME:<br /><font size="1">(domain\user)</font>
-            </td>
-            <td>
-                <input type="text" style="width:400px;" name="user">
-            </td>
-        </tr><!-- username -->
-        <tr align="center" class="client_table_body">
-            <td>
-                PASSWORD:
-            </td>
-            <td>
-                <input type="password" name="pass" style="width:400px;">
-            </td>
-        </tr><!-- password -->
-        <tr align="center" class="client_table_tail">
-            <td colspan="2" align="center">
-                <input type="submit" value="Login" name="B1">
-            </td>
-        </tr><!-- submit -->
-    </table>
-    </form>
-<?php
-die();
+    # uns_smarty() turns on escape_html, so the raw string is passed through and escaped
+    # on output - the old inline version called htmlspecialchars() here instead.
+    $smarty = uns_smarty();
+    $smarty->assign('message', (string)$mesg);
+    $smarty->display('login.tpl');
+    die();
 }
 ?>

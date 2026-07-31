@@ -260,6 +260,12 @@ function uns_smarty()
     # cheap (a client redirect). Compilation is still cached, which is where the win is.
     $smarty->setCaching(Smarty\Smarty::CACHING_OFF);
 
+    # Escape on output by default. Smarty ships with this OFF, so without it every {$var}
+    # would emit raw HTML - a step backwards from the htmlspecialchars() calls the inline
+    # markup used. With it on, the handful of places that legitimately emit stored HTML
+    # (a custom message body, a generated RSS block) say so explicitly with "nofilter".
+    $smarty->setEscapeHtml(true);
+
     # Values every template can rely on.
     $vars = __DIR__.'/configs/vars.php';
     if(is_readable($vars))
