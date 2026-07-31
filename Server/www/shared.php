@@ -1,6 +1,7 @@
 <?php
 #    shared.php, Some shared functions for both the Client page and the admin page
-#    Copyright (C) 2010  Phillip Ferland
+#    Copyright (C) 2010  Phillip Ferland / Random Intervals
+#    Copyright (C) 2026  Andrew Calcutt / TechIdiots LLC
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
