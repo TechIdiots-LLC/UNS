@@ -2141,376 +2141,127 @@ function admin_panel($usr, $func, $proto)
             {
                 $client_get = filter_input(INPUT_GET, 'client', FILTER_SANITIZE_SPECIAL_CHARS);
                 if(!is_safe_client_id($client_get))
-                    {
-                        # break, not die: the panel is captured with output buffering, so
-                        # exiting here would flush raw markup with no page shell at all.
-                        echo "Invalid client.";
-                        break;
-                    }
-                ?>
-                <script type="text/javascript">
-                function SetAllCheckBoxes(FormName, FieldName, CheckValue)
                 {
-                        if(!document.forms[FormName])
-                                return;
-                        var objCheckBoxes = document.forms[FormName].elements[FieldName];
-                        if(!objCheckBoxes)
-                                return;
-                        var countCheckBoxes = objCheckBoxes.length;
-                        if(!countCheckBoxes)
-                                objCheckBoxes.checked = CheckValue;
-                        else
-                                // set the check value for all check boxes
-                                for(var i = 0; i < countCheckBoxes; i++)
-                                        objCheckBoxes[i].checked = CheckValue;
+                    # break, not die: the panel is captured with output buffering, so
+                    # exiting here would flush raw markup with no page shell at all.
+                    echo "Invalid client.";
+                    break;
                 }
-                function expandcontract(tbodyid,ClickIcon)
-                {
-                        if (document.getElementById(ClickIcon).innerHTML == "+")
-                        {
-                                document.getElementById(tbodyid).style.display = "";
-                                document.getElementById(ClickIcon).innerHTML = "-";
-                        }else{
-                                document.getElementById(tbodyid).style.display = "none";
-                                document.getElementById(ClickIcon).innerHTML = "+";
-                        }
-                }
-                </script>
-                <?php
+
                 $stmt = $conn->prepare("SELECT * FROM friendly WHERE client = ?");
                 $stmt->execute([$client_get]);
                 $friendly = $stmt->fetch(PDO::FETCH_ASSOC);
-                ?>
-                <table border="1px" align="center">
-                    <tr valign="center" class="client_table_head">
-                        <td>
-                            Client Name:
-                        </td>
-                        <td>
-                            <table width="100%">
-                                <tr>
-                                    <td width="80%">
-                                    <br />
-                                        <form name="client_rename" action="?func=rename_client&client=<?php echo $client_get;?>" method="POST">
-                                            <input type="text" name="client_name" style="width:400px;" value="<?php echo htmlspecialchars($friendly['friendly'] ?? '', ENT_QUOTES); ?>"/>
-                                            <input type="hidden" name="client_id" value="<?php echo (int)($friendly['id'] ?? 0); ?>"/>
-                                            <input type="submit" value="Rename"/>
-                                        </form>
-                                    </td>
-                                    <td>
-                                        <?php
-                                        if($led_blink)
-                                        {
-                                            $stmt = $conn->prepare("SELECT led FROM allowed_clients WHERE client_name = ?");
-                                            $stmt->execute([$client_get]);
-                                            $led = $stmt->fetch(PDO::FETCH_ASSOC);
-                                        ?>
-                                        LED Group:<br/>
-                                        <form name="client_led" action="?func=client_led_set" method="POST">
-                                            <input type="hidden" name="cl_id" value="<?php echo $client_get; ?>"/>
-                                            <select name="cl_led_id" onchange='this.form.submit()'>
-                                                <option value="1" <?php if($led['led'] == '1')echo "selected='yes'"; ?>>LED 1</option>
-                                                <option value="2" <?php if($led['led'] == '2')echo "selected='yes'"; ?>>LED 2</option>
-                                                <option value="3" <?php if($led['led'] == '3')echo "selected='yes'"; ?>>LED 3</option>
-                                                <option value="4" <?php if($led['led'] == '4')echo "selected='yes'"; ?>>LED 4</option>
-                                                <option value="5" <?php if($led['led'] == '5')echo "selected='yes'"; ?>>LED 5</option>
-                                                <option value="6" <?php if($led['led'] == '6')echo "selected='yes'"; ?>>LED 6</option>
-                                            </select>
-                                        </form>
-                                        <?php
-                                        }
-                                        ?>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    <tr class="client_table_body">
-                        <td>
-                            Client URL:
-                        </td>
-                        <td>
-                            <a class="links" href="<?php echo $reg_url.'index.php?id='.$friendly['client'];?>" target="_blank"><?php echo $reg_url.'index.php?id='.$friendly['client'];?></a>
-                        </td>
-                    </tr>
-                </table>
-                <hr />
-                <form name="client_edit" action="?func=edit_urls&client=<?php echo $client_get;?>&cl_func=edit_proc" method="POST">
-                <table border="1px" width="100%">
-                    <tr class="client_table_head">
-                        <th colspan="4">
-                            Messages
-                        </th>
-                    </tr>
-                    <tr class="client_table_head">
-                        <th>URL</th><th>Set Refresh</th><th width="120px">Select</th>
-                    </tr>
-                    <?php
-                    $link = db_connect($server, $username, $password, $db, $driver);
-                    $result1 = $link->query("SELECT * FROM ".$client_get."_links ORDER BY url ASC");
-                    $client_links_all = $result1->fetchAll(PDO::FETCH_ASSOC);
-                    if(count($client_links_all) > 0)
+
+                $led_selected = 0;
+                if($led_blink)
+                {
+                    $led_stmt = $conn->prepare("SELECT led FROM allowed_clients WHERE client_name = ?");
+                    $led_stmt->execute([$client_get]);
+                    $led_row = $led_stmt->fetch(PDO::FETCH_ASSOC);
+                    $led_selected = (int)($led_row['led'] ?? 0);
+                }
+
+                # $client_get is whitelisted by is_safe_client_id() above, so it is safe as
+                # a table name here - it cannot be parameterized.
+                $links_stmt = $conn->query("SELECT * FROM ".$client_get."_links ORDER BY url ASC");
+                $client_links_all = $links_stmt ? $links_stmt->fetchAll(PDO::FETCH_ASSOC) : array();
+
+                $links = array();
+                foreach($client_links_all as $row)
+                {
+                    # When a URL points back at this UNS install, name the RSS feed or custom
+                    # message it refers to, so the list is readable rather than a row of
+                    # near-identical template.php links.
+                    $label = '';
+                    $parse_url = parse_url($row['url']);
+                    if(str_replace("/", "", $host) == ($parse_url['host'] ?? null))
                     {
-                        foreach($client_links_all as $links)
+                        $exp_url = explode("?", html_entity_decode($row['url']));
+                        $query_ = array();
+                        foreach(explode('&', $exp_url[1] ?? '') as $e)
                         {
-                            $link_url_esc = htmlspecialchars($links['url'], ENT_QUOTES);
-                            ?>
-                    <tr class="client_table_body">
-                        <td>
-                            <?php
-                            echo '<a class="links" href="'.$link_url_esc.'" target="_blank">'.$link_url_esc.'</a>';
-                            $parse_url = parse_url($links['url']);
-                            if(str_replace("/","",$host) == ($parse_url['host'] ?? null))
-                            {
-                                $exp_url = explode("?", html_entity_decode($links['url']));
-                                $query_url = $exp_url[1] ?? '';
-                                $query_ = array();
-                                $exp = explode('&',$query_url);
-                                foreach($exp as $e)
-                                {
-                                    $qur = explode("=", $e);
-                                    $query_[$qur[0]] = $qur[1] ?? '';
-                                }
-                                $id = (int)($query_['id'] ?? 0);
-
-                                switch($query_['type'] ?? '')
-                                {
-                                    case "rss":
-                                        $stmt2 = $link->prepare("SELECT * FROM rss_feeds WHERE id = ?");
-                                        $stmt2->execute([$id]);
-                                        $rss = $stmt2->fetch(PDO::FETCH_ASSOC);
-                                        if($rss){echo " (".htmlspecialchars($rss['name'], ENT_QUOTES).")";}
-                                        break;
-                                    case "c_message":
-                                        $stmt2 = $link->prepare("SELECT * FROM c_messages WHERE id = ?");
-                                        $stmt2->execute([$id]);
-                                        $c_mesg = $stmt2->fetch(PDO::FETCH_ASSOC);
-                                        if($c_mesg){echo " (".htmlspecialchars($c_mesg['name'], ENT_QUOTES).")";}
-                                        break;
-                                }
-                            }
-                            ?>
-                        </td>
-                        <td align="center">
-                            <input type='text' style="width:45px;" name="refresh_time[]" value='<?php echo (int)$links['refresh'];?>'>
-                            <input type="hidden" name="URLid[]" value="<?php echo (int)$links['id'];?>">
-                        </td>
-                        <th><input type="checkbox" name="urls[]" value="<?php echo (int)$links['id'];?>"></th>
-
-                    </tr>
-                            <?php
+                            $qur = explode("=", $e);
+                            $query_[$qur[0]] = $qur[1] ?? '';
                         }
-                    }else
-                    {
-                        ?>
-                    <tr class="client_table_body">
-                        <td align="center" colspan="4">There are no URLs added yet.</td>
-                    </tr>
-                        <?php
+                        $lid = (int)($query_['id'] ?? 0);
+                        switch($query_['type'] ?? '')
+                        {
+                            case "rss":
+                                $s2 = $conn->prepare("SELECT name FROM rss_feeds WHERE id = ?");
+                                $s2->execute([$lid]);
+                                $r2 = $s2->fetch(PDO::FETCH_ASSOC);
+                                if($r2){$label = $r2['name'];}
+                                break;
+                            case "c_message":
+                                $s2 = $conn->prepare("SELECT name FROM c_messages WHERE id = ?");
+                                $s2->execute([$lid]);
+                                $r2 = $s2->fetch(PDO::FETCH_ASSOC);
+                                if($r2){$label = $r2['name'];}
+                                break;
+                        }
                     }
-                    ?>
-                    <tr class="client_table_tail">
-                        <td align="center">
-                            <input type='submit' name="copy2" value='Copy'>
-                            <input type='submit' name="save_list" value='Save To List'>
-                            <input type='submit' name="remove" value='Remove'>
-                        </td>
-                        <td align="center">
-                            <input type='submit' name="refresh" value='Set all'>
-                        </td>
-                        <td align="center">
-                            <input type="button" onclick="SetAllCheckBoxes('client_edit', 'urls[]', true);" value="Check">
-                            <input type="button" onclick="SetAllCheckBoxes('client_edit', 'urls[]', false);" value="Uncheck">
-                        </td>
-                    </tr>
-                    </form>
-                    <tr class="client_table_tail">
-                        <td colspan="4">
-                            <form name="save_new" action="?func=edit_urls&client=<?php echo $client_get;?>&cl_func=add_url_batch" method="POST">
-                            <table style="width: 100%">
-                                <tr>
-                                    <td style="width: 200px" valign="center">
-                                        URLs:
-                                    </td>
-                                    <td>
-                                        <textarea name="URLS" rows="10" style="border:1px; solid #999999; width:90%; margin:5px 0; padding:3px;">http://</textarea>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td valign="center">
-                                        Refresh Times for all:
-                                    </td>
-                                    <td>
-                                        <input type="text" name="refresh" value="<?php echo $refresh; ?>">
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td>
-                                    </td>
-                                    <td>
-                                        <input type='submit' value='Add URLs'>
-                                    </td>
-                                </tr>
-                            </table>
-                            </form>
-                        </td>
-                    </tr>
-                </table>
-                <hr />
-                <table border="1px" class="all_tables">
-                    <tr class="client_table_head">
-                        <th colspan="5">Saved Lists</th>
-                    </tr>
-                    <tr class="client_table_head">
-                        <th>+/-</th><th>Name</th><th>Date</th><th>Options</th>
-                    </tr>
-                <?php
-                $result = $conn->query("SELECT * FROM saved_lists ORDER by id DESC");
-                $tablerowid = 0;
-                while($client_arc = $result->fetch(PDO::FETCH_ASSOC))
-                {
-                    $arc_urls_esc = htmlspecialchars($client_arc['urls'], ENT_QUOTES);
-                    ?>
-                    <tr class="client_table_body">
-                        <td
-                            onclick="expandcontract('SavedRow<?php echo $tablerowid;?>','SavedClickIcon<?php echo $tablerowid;?>')"
-                            id="SavedClickIcon<?php echo $tablerowid;?>" style="cursor: pointer; cursor: hand;">+</td>
-                        <td>
-                            <?php echo htmlspecialchars($client_arc['name'], ENT_QUOTES);?>
-                        </td>
-                        <td>
-                            <?php echo date('F j, Y, g:i a', $client_arc['date']);?>
-                        </td>
-                        <td>
-                            <table>
-                                <tr>
-                                    <td>
-                                        <form name="saved" action="?func=edit_urls&client=<?php echo $client_get;?>&cl_func=restore" method="POST">
-                                            <input type="hidden" name="urls" value="<?php echo $arc_urls_esc; ?>">
-                                            <input type='submit' value='Restore'>
-                                        </form>
-                                    </td>
-                                    <td>
-                                        <form name="saved" action="?func=edit_urls&client=<?php echo $client_get;?>&cl_func=remove" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo (int)$client_arc['id']; ?>">
-                                            <input type='submit' value='Remove'>
-                                        </form>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    <?php
-                    $exp = explode("|", $client_arc['urls']);
-                    ?>
-                    <tbody id="SavedRow<?php echo $tablerowid;?>" style="display:none">
-                        <tr>
-                            <td colspan="4">
-                                <table border="1" width="100%">
-                        <?php
-                        # Entries are stored as "url~refresh", so show the two parts in their own
-                        # columns rather than printing the raw separator. An empty list would
-                        # previously render as one blank row with no explanation.
-                        $shown = 0;
-                        foreach($exp as $url)
-                        {
-                            $url = trim($url);
-                            if($url === ''){continue;}
-                            $parts = explode('~', $url, 2);
-                            $shown++;
-                            ?>
-                        <tr class="client_table_body">
-                            <td><?php echo htmlspecialchars($parts[0], ENT_QUOTES);?></td>
-                            <td align="center" style="width:120px;">refresh: <?php echo isset($parts[1]) ? (int)$parts[1] : '-';?></td>
-                        </tr>
-                        <?php
-                        }
-                        if($shown === 0)
-                        {
-                            ?>
-                        <tr class="client_table_body">
-                            <td><i>This saved list is empty - no URLs were selected when it was saved.</i></td>
-                        </tr>
-                        <?php
-                        }
-                        ?>
-                                </table>
-                            </td>
-                        </tr>
-                    </tbody>
-                    <?php
-                    $tablerowid++;
+                    $links[] = array(
+                        'id'      => (int)$row['id'],
+                        'url'     => $row['url'],
+                        'label'   => $label,
+                        'refresh' => (int)$row['refresh'],
+                    );
                 }
-                ?>
-                </table>
-                <hr />
-                <table border="1px" class="all_tables">
-                    <tr class="client_table_head">
-                        <th colspan="4">Clients Archived Links</th>
-                    </tr>
-                    <tr class="client_table_head">
-                        <th>+/-</th><th>Name</th><th>Date</th><th>Options</th>
-                    </tr>
-                <?php
-                $stmt = $conn->prepare("SELECT * FROM archive_links WHERE client = ? ORDER by date ASC");
-                $stmt->execute([$client_get]);
-                $result = $stmt;
-                $tablerowid = 0;
-                while($client_arc = $result->fetch(PDO::FETCH_ASSOC))
+
+                # Saved lists and per-client archives have the same shape; entries are stored
+                # as "url~refresh" pairs joined by "|".
+                $split_entries = function($raw)
                 {
-                    $arc_urls_esc = htmlspecialchars($client_arc['urls'], ENT_QUOTES);
-                    ?>
-                    <tr class="client_table_body">
-                        <td onclick="expandcontract('Row<?php echo $tablerowid;?>','ClickIcon<?php echo $tablerowid;?>')"
-                            id="ClickIcon<?php echo $tablerowid;?>" style="cursor: pointer; cursor: hand;">+</td>
-                        <td><?php echo htmlspecialchars($client_arc['name'], ENT_QUOTES);?></td>
-                        <td><?php echo date('F j, Y, g:i a', $client_arc['date']);?></td>
-                        <td>
-                            <table>
-                                <tr>
-                                    <td>
-                                        <form name="saved" action="?func=edit_urls&client=<?php echo $client_get;?>&cl_func=restore" method="POST">
-                                            <input type="hidden" name="urls" value="<?php echo $arc_urls_esc; ?>">
-                                            <input type='submit' name="copy" value='Restore'>
-                                        </form>
-                                    </td>
-                                    <td>
-                                        <form name="saved" action="?func=rm_arc_urls&client=<?php echo $client_get;?>" method="POST">
-                                            <input type="hidden" name="id" value="<?php echo (int)$client_arc['id']; ?>">
-                                            <input type='submit' name="copy" value='Remove'>
-                                        </form>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    <?php
-                    $exp = explode("|", $client_arc['urls']);
-                    ?>
-                    <tbody id="Row<?php echo $tablerowid;?>" style="display:none">
-                        <tr>
-                            <td colspan="4">
-                                <table border="1" width="100%">
-                        <?php
-                        foreach($exp as $url)
-                        {
-                            ?>
-                        <tr class="client_table_body">
-                            <td><?php echo htmlspecialchars($url, ENT_QUOTES);?></td>
-                        </tr>
-                        <?php
-                        }
-                        ?>
-                                </table>
-                            </td>
-                        </tr>
-                    </tbody>
-                    <?php
-                    $tablerowid++;
+                    $out = array();
+                    foreach(explode("|", (string)$raw) as $entry)
+                    {
+                        $entry = trim($entry);
+                        if($entry === ''){continue;}
+                        $parts = explode('~', $entry, 2);
+                        $out[] = array('url' => $parts[0], 'refresh' => isset($parts[1]) ? (int)$parts[1] : '-');
+                    }
+                    return $out;
+                };
+
+                $saved_lists = array();
+                $sl = $conn->query("SELECT * FROM saved_lists ORDER by id DESC");
+                while($sl && $r = $sl->fetch(PDO::FETCH_ASSOC))
+                {
+                    $saved_lists[] = array(
+                        'id'       => (int)$r['id'],
+                        'name'     => $r['name'],
+                        'date'     => date('F j, Y, g:i a', $r['date']),
+                        'urls_raw' => $r['urls'],
+                        'entries'  => $split_entries($r['urls']),
+                    );
                 }
-                ?>
-                </table>
-                <?php
+
+                $archives = array();
+                $ar = $conn->prepare("SELECT * FROM archive_links WHERE client = ? ORDER by date ASC");
+                $ar->execute([$client_get]);
+                while($r = $ar->fetch(PDO::FETCH_ASSOC))
+                {
+                    $archives[] = array(
+                        'id'       => (int)$r['id'],
+                        'name'     => $r['name'],
+                        'date'     => date('F j, Y, g:i a', $r['date']),
+                        'urls_raw' => $r['urls'],
+                        'entries'  => $split_entries($r['urls']),
+                    );
+                }
+
+                $vc = uns_smarty();
+                $vc->assign('client_id',    $client_get);
+                $vc->assign('friendly',     $friendly['friendly'] ?? '');
+                $vc->assign('friendly_id',  (int)($friendly['id'] ?? 0));
+                $vc->assign('client_url',   $reg_url.'index.php?id='.($friendly['client'] ?? ''));
+                $vc->assign('led_blink',    !empty($led_blink));
+                $vc->assign('led_selected', $led_selected);
+                $vc->assign('links',        $links);
+                $vc->assign('refresh',      (int)$refresh);
+                $vc->assign('saved_lists',  $saved_lists);
+                $vc->assign('archives',     $archives);
+                echo $vc->fetch('screens/view_client.tpl');
             }else
             {
                 echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
