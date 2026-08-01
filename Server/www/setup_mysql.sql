@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS `settings` (
 
 
 INSERT INTO `settings` (`id`, `emerg`, `built_in_admin`, `uns_ver`, `svn_rev`) VALUES
-(1, 0, 0, '2.0.0', '80');
+(1, 0, 0, '3.1.0', '80');
 
 -- --------------------------------------------------------
 

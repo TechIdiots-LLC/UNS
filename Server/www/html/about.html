@@ -61,6 +61,23 @@
                                         </td>
                                     </tr>
                                     <tr>
+                                        <td class="verhead" id="31">
+                                            v3.1.0 (2026-08-01)
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td class="MenuLinks">
+                                            <ul>
+                                                <li class="style1">Client groups: a named collection of screens with its own URL list, which either adds to each member's rotation or replaces it for a takeover. A screen can belong to several groups at once.</li>
+                                                <li class="style1">Emergency mode can now be aimed at one group or one client instead of every screen. The global switch is unchanged and still overrides everything.</li>
+                                                <li class="style1">Emergency mode expires on its own, using the alert's own expiry where it has one, so displays are no longer stranded on an alert if the monitor stops running</li>
+                                                <li class="style1">Alert routing: rules send an incoming CAP alert to particular groups or clients, matching on category, severity, area description or geocode (SAME/FIPS/UGC). With no rules configured the monitor behaves exactly as before.</li>
+                                                <li class="style1">A test suite that runs on PHP 7.4 through 8.4 in CI</li>
+                                                <li class="style1">Fixed emergency mode serving nothing at all on a fresh install, and a rotating display being able to show the same page twice in a row</li>
+                                            </ul>
+                                        </td>
+                                    </tr>
+                                    <tr>
                                         <td class="verhead" id="3">
                                             v3.0.0 (2026-07-31)
                                         </td>
