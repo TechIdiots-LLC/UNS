@@ -66,6 +66,15 @@ jobs:
           git archive --format=zip    -o "uns-${VERSION}.zip"    --prefix="uns-${VERSION}/" HEAD
           git archive --format=tar.gz -o "uns-${VERSION}.tar.gz" --prefix="uns-${VERSION}/" HEAD
 
+          # Copies under a name that never changes, so a download link can be written
+          # once and keep working. GitHub serves
+          #   /releases/latest/download/<asset>
+          # by redirecting to that asset in whatever the newest release is - which only
+          # works if the filename is the same in every release, and the versioned ones
+          # above are not. The archives inside still unpack to uns-<version>/.
+          cp "uns-${VERSION}.zip"    uns-latest.zip
+          cp "uns-${VERSION}.tar.gz" uns-latest.tar.gz
+
       - name: Upload release archives
         uses: actions/upload-artifact@v4
         with:
