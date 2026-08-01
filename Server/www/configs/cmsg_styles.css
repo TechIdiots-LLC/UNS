@@ -21,6 +21,25 @@ a {
     Description: Styles for the Custom messages header
 */
 
+/*
+    The logo was forced to 462x70 in the markup, carried over from the original wide
+    banner logo. The image this actually ships is 125x74, so it was being stretched
+    nearly four times too wide and blurred by the upscale at the same time.
+
+    Nothing here sets a size, only an upper bound. A logo that fits displays at its own
+    natural dimensions, so it is never upscaled into a blur; a larger one is scaled down
+    with its proportions intact rather than taking over the screen. Replacing logo.png
+    with an image of any shape therefore just works, which is the failure that produced
+    the original bug - dimensions written for one file outliving it.
+*/
+.cmsglogo {
+	max-height: 100px;
+	max-width: 100%;
+	height: auto;
+	width: auto;
+	vertical-align: middle;
+}
+
 .cmsgheader {
 	text-align: center;
 	background-color: #003466;

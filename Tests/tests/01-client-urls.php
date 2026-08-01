@@ -89,3 +89,42 @@ uns_test('clearing global emergency returns clients to normal', function($site) 
     $site->setGlobalEmerg(0);
     assert_same('http://normal.example/', $site->clientUrl('lobby'), 'back to normal once cleared');
 });
+
+# --- the custom message wrapper ---------------------------------------------
+
+uns_test('the wrapper page renders a message', function($site) {
+    $site->exec("INSERT INTO c_messages (name, body, refresh, wrapper) VALUES ('note', '<p>Hello</p>', 30, 1)");
+    $id = $site->one("SELECT id FROM c_messages WHERE name = 'note'");
+
+    $r = $site->http('/html/template.php?type=c_message&id='.$id);
+    assert_same(200, $r['code'], 'the page responds');
+    assert_contains('Hello', $r['body'], 'the message body is shown');
+    assert_contains('logo.png', $r['body'], 'and the wrapper furniture is there');
+});
+
+uns_test('the wrapper does not force the logo out of shape', function($site) {
+    # It used to be marked up as 462x70 while the shipped logo is 125x74, stretching it
+    # nearly four times too wide. Nothing sets a size now - the stylesheet only caps it -
+    # so replacing logo.png with an image of any shape still renders correctly.
+    $site->exec("INSERT INTO c_messages (name, body, refresh, wrapper) VALUES ('note', '<p>Hello</p>', 30, 1)");
+    $id = $site->one("SELECT id FROM c_messages WHERE name = 'note'");
+    $r  = $site->http('/html/template.php?type=c_message&id='.$id);
+
+    assert_not_contains('width="462"', $r['body'], 'no hardcoded width');
+    assert_not_contains('height="70"', $r['body'], 'no hardcoded height');
+    assert_contains('class="cmsglogo"', $r['body'], 'sized by the stylesheet instead');
+
+    # And the dimensions the stylesheet works from must match the file that ships.
+    $size = getimagesize(dirname(dirname(__DIR__)).'/Server/www/html/logo.png');
+    assert_true($size !== false, 'logo.png is a readable image');
+    assert_true($size[0] > 0 && $size[1] > 0, 'with real dimensions ('.$size[0].'x'.$size[1].')');
+});
+
+uns_test('a message without the wrapper is returned bare', function($site) {
+    $site->exec("INSERT INTO c_messages (name, body, refresh, wrapper) VALUES ('bare', '<p>Raw</p>', 30, 0)");
+    $id = $site->one("SELECT id FROM c_messages WHERE name = 'bare'");
+
+    $r = $site->http('/html/template.php?type=c_message&id='.$id);
+    assert_contains('Raw', $r['body'], 'the body is returned');
+    assert_not_contains('logo.png', $r['body'], 'with no wrapper furniture');
+});

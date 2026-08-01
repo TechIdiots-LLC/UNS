@@ -12,8 +12,8 @@
     <body style="background-color: #C0C0C0">
         <table style="width: 80%; height: 100%;" align="center">
             <tr>
-                <td class="cmsgheader" style="height: 67px">
-                    <img alt="Logo" src="../html/logo.png" width="462" height="70">
+                <td class="cmsgheader">
+                    <img alt="Logo" src="../html/logo.png" class="cmsglogo">
                 </td>
             </tr>
             <tr class="InfoCell">
