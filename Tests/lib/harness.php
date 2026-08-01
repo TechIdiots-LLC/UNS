@@ -319,16 +319,19 @@ class UnsTestSite
         return 'http://127.0.0.1:'.$this->port;
     }
 
-    public function http($path, $post = null, $cookie = null)
+    public function http($path, $post = null, $cookie = null, $extraHeaders = array())
     {
         $url = (strpos($path, 'http') === 0) ? $path : $this->baseUrl().$path;
+
+        $headers = $extraHeaders;
+        if($cookie !== null){$headers[] = 'Cookie: '.$cookie;}
 
         if(function_exists('curl_init'))
         {
             $ch = curl_init($url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_TIMEOUT, 20);
-            if($cookie !== null){curl_setopt($ch, CURLOPT_HTTPHEADER, array('Cookie: '.$cookie));}
+            if($headers){curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);}
             if($post !== null)
             {
                 curl_setopt($ch, CURLOPT_POST, true);
@@ -341,8 +344,6 @@ class UnsTestSite
         }
 
         $opts = array('http' => array('timeout' => 20, 'ignore_errors' => true));
-        $headers = array();
-        if($cookie !== null){$headers[] = 'Cookie: '.$cookie;}
         if($post !== null)
         {
             $opts['http']['method']  = 'POST';
@@ -354,6 +355,14 @@ class UnsTestSite
         $code = 0;
         if(isset($http_response_header[0]) && preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)){$code = (int)$m[1];}
         return array('code' => $code, 'body' => (string)$body);
+    }
+
+    # A GET carrying arbitrary request headers. Used by the SSO tests, where the
+    # identity has to arrive as a header because there is no way to set a server
+    # variable through the built-in web server.
+    public function httpHeaders($path, $headers)
+    {
+        return $this->http($path, null, null, $headers);
     }
 
     # The URL a display would actually be sent to right now.

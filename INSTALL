@@ -52,3 +52,83 @@ password_hash() value) and a matching row into allowed_users with username
 
     Step 6
 Add Viewing Clients and set them up as you like.
+
+Single sign-on (ADFS, Entra ID, Shibboleth, Okta)
+-------------------------------------------------
+UNS does not implement SAML or OpenID Connect itself. Instead it trusts an
+identity your web server has already established, so every protocol detail,
+certificate and signature check stays in a module built for the job. That works
+with anything your web server can speak - ADFS or Entra ID over OIDC, a
+Shibboleth SP for SAML federations, or IIS Windows authentication.
+
+Only one file needs protecting: admin/sso.php. Leave the rest of the admin
+folder unprotected so the built-in administrator can still sign in with a
+password. If the identity provider is unreachable, that local login is the only
+way back into your own signage - which is exactly when you will want it.
+
+    Step 1
+Configure your web server to authenticate admin/sso.php.
+
+Apache with mod_auth_openidc (ADFS 2016+, Entra ID, Keycloak, Okta):
+
+    OIDCProviderMetadataURL https://login.example.edu/adfs/.well-known/openid-configuration
+    OIDCClientID            uns
+    OIDCClientSecret        <secret>
+    OIDCRedirectURI         https://uns.example.edu/uns/admin/redirect_uri
+    # ^ must NOT be a real file - mod_auth_openidc serves this path itself, and the
+    #   same URL has to be registered with the identity provider
+    OIDCCryptoPassphrase    <random string>
+    OIDCRemoteUserClaim     preferred_username
+
+    <Files "sso.php">
+        AuthType openid-connect
+        Require valid-user
+    </Files>
+
+Apache with a Shibboleth SP (InCommon and other SAML federations):
+
+    <Files "sso.php">
+        AuthType shibboleth
+        ShibRequestSetting requireSession 1
+        Require valid-user
+    </Files>
+
+IIS: enable Windows Authentication on sso.php only, and leave Anonymous
+Authentication enabled for the rest of the folder.
+
+    Step 2
+In UNS Options, set "Sign-in method" to "Single sign-on via the web server".
+
+    Step 3
+Check "Identity server variable". REMOTE_USER is correct for all three setups
+above and is what UNS uses by default. The options page shows what the web
+server is currently providing, which is the quickest way to confirm the module
+is working.
+
+Do not point this at an HTTP_* variable unless a proxy in front of UNS always
+overwrites it. Those come from request headers, which means the client sets
+them, and anyone could then claim to be anyone. UNS refuses them unless you
+explicitly allow header variables.
+
+    Step 4
+Decide how accounts are handled. allowed_users stays the authorisation list -
+the identity provider only settles who someone is, never what they may do.
+
+  - Leave "Create accounts on first sign-in" off to require that each user is
+    added under User Permissions first.
+  - Turn it on to have UNS create an account the first time someone signs in.
+    New accounts get the ordinary permissions, never Edit Users or UNS Options.
+
+Optionally set a group variable (eg. OIDC_CLAIM_groups) and an administrator
+group. Members of that group get Edit Users and UNS Options, and the check runs
+at every sign-in, so removing someone at the provider takes effect in UNS too.
+
+    Step 5
+Set a logout URL if your provider supports RP-initiated logout. Without one,
+logging out of UNS ends only the UNS session - the provider will sign the same
+person straight back in.
+
+Note on LDAP: the older "Active Directory (LDAP)" mode has UNS collect the
+user's domain password and bind with it, over a plaintext connection on port
+3268. Single sign-on removes both problems, since UNS never sees a domain
+credential.

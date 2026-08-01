@@ -107,6 +107,76 @@
                             </tr>
 
                             <tr class="client_table_head">
+                                <td colspan="2" align="center">Authentication
+                                    <br /><font size="1">UNS does not speak SAML or OpenID Connect itself. In SSO mode it
+                                    trusts an identity the web server has already established - mod_auth_openidc, a
+                                    Shibboleth SP, or IIS Windows authentication - which only needs to protect
+                                    <b>admin/sso.php</b>. See INSTALL for the configuration.</font></td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td width="250px">Sign-in method</td>
+                                <td>
+                                    <select name="auth_mode" style="width:100%">
+                                        <option value="internal"{if $auth_mode == 'internal'} selected{/if}>Local UNS accounts only</option>
+                                        <option value="ldap"{if $auth_mode == 'ldap'} selected{/if}>Active Directory (LDAP)</option>
+                                        <option value="sso"{if $auth_mode == 'sso'} selected{/if}>Single sign-on via the web server</option>
+                                    </select>
+                                    <font size="1">Local accounts always keep working, so an identity provider outage
+                                    cannot lock you out.</font>
+                                </td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>Identity server variable
+                                    <br /><font size="1">REMOTE_USER for mod_auth_openidc, Shibboleth and IIS.
+                                    {if $sso_seen != ''}Currently reading: <b>{$sso_seen}</b>{else}Not set on this
+                                    request - expected, unless you are viewing this page through the protected
+                                    path.{/if}</font></td>
+                                <td><input type="text" name="sso_user_var" style="width:100%" value="{$sso_user_var}"/></td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>Allow HTTP_* variables?
+                                    <br /><font size="1">Anything named HTTP_* comes from a request header and can be
+                                    set by the client. Only enable this if a proxy in front always overwrites it.</font></td>
+                                <td><input type="checkbox" name="sso_allow_headers" value="1"{if $sso_allow_hdr} checked{/if}/></td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>Strip the domain from the name?
+                                    <br /><font size="1">Turns DOMAIN\user and user@example.edu into user</font></td>
+                                <td><input type="checkbox" name="sso_strip_domain" value="1"{if $sso_strip} checked{/if}/></td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>Lowercase the name?</td>
+                                <td><input type="checkbox" name="sso_lowercase" value="1"{if $sso_lower} checked{/if}/></td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>Create accounts on first sign-in?
+                                    <br /><font size="1">Off means a user must already exist under User Permissions</font></td>
+                                <td><input type="checkbox" name="sso_autocreate" value="1"{if $sso_autocreate} checked{/if}/></td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>Group server variable
+                                    <br /><font size="1">Optional, eg. OIDC_CLAIM_groups. Leave empty to manage
+                                    permissions entirely in UNS.</font></td>
+                                <td><input type="text" name="sso_group_var" style="width:100%" value="{$sso_group_var}"/></td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>Administrator group
+                                    <br /><font size="1">Members get Edit Users and UNS Options. Re-applied at every
+                                    sign-in, so removing someone at the provider takes effect here too.</font></td>
+                                <td><input type="text" name="sso_admin_group" style="width:100%" value="{$sso_admin_grp}"/></td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>Logout URL
+                                    <br /><font size="1">Where Log Out sends the browser, so the provider can end its
+                                    own session. Empty just returns to the UNS login page.</font></td>
+                                <td><input type="text" name="sso_logout_url" style="width:100%" value="{$sso_logout}"/></td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>Sign-in button text</td>
+                                <td><input type="text" name="sso_button_label" style="width:100%" value="{$sso_button}"/></td>
+                            </tr>
+
+                            <tr class="client_table_head">
                                 <td colspan="2" align="center">Emergency Alert Monitor
                                     <br /><font size="1">Used by the scheduled script in Scripts/EmergencyMonitor.
                                     Leave the feed URL empty to switch it off.</font></td>

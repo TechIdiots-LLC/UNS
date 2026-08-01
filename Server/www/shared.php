@@ -616,6 +616,145 @@ function uns_groups_forget_client($conn, $driver, $client)
     return $stmt ? $stmt->execute(array($client)) : false;
 }
 
+# --- Sessions ---------------------------------------------------------------
+
+# Mints a login session: a random token in hash_links plus the cookie that names it.
+#
+# Lives here rather than in admin/index.php because it is the single point at which a
+# user becomes logged in, and the SSO entry point needs it too. The token is the only
+# thing that authorises a request - the username travels in the cookie for display
+# only, and is always re-read from hash_links server-side.
+function uns_create_session($conn, $username_login, $timeout, $root, $ssl)
+{
+    $hash = bin2hex(random_bytes(16));   # must be unguessable, hence a CSPRNG
+    $time = ($timeout > 0) ? time() + $timeout : 0;
+    $path = ($root === '' || $root === '/') ? '/admin' : '/'.$root.'admin';
+
+    if(!setcookie('login_yes', $hash.':'.$username_login, $time, $path, '', (bool)$ssl, true))
+    {
+        return false;
+    }
+    $stmt = $conn->prepare("INSERT INTO hash_links (hash, time, username) VALUES (?, ?, ?)");
+    if(!$stmt || !$stmt->execute(array($hash, $time, $username_login))){return false;}
+    return $hash;
+}
+
+# --- Single sign-on ---------------------------------------------------------
+#
+# UNS does not speak SAML or OpenID Connect itself. It trusts an identity already
+# established by the web server - mod_auth_openidc, a Shibboleth SP, or IIS Windows
+# authentication - which keeps every protocol detail, certificate and signature check
+# outside the application, where it is maintained by people who do that for a living.
+#
+# The contract is simply: the web server authenticates a request to admin/sso.php and
+# exposes who the user is in a server variable. See INSTALL for the configuration.
+
+# The authentication mode. Kept backward compatible: installs that predate this only
+# have the $LDAP flag in configs/vars.php, and must keep behaving the way they did.
+function uns_auth_mode($conn, $driver, $ldap_flag)
+{
+    $mode = uns_config_get($conn, $driver, 'auth_mode', '');
+    if(in_array($mode, array('internal', 'ldap', 'sso'), true)){return $mode;}
+    return !empty($ldap_flag) ? 'ldap' : 'internal';
+}
+
+function uns_sso_config($conn, $driver)
+{
+    $all = uns_config_all($conn, $driver);
+    $get = function($key, $default) use ($all)
+    {
+        return array_key_exists($key, $all) && $all[$key] !== '' ? $all[$key] : $default;
+    };
+
+    return array(
+        # Which server variable names the user. REMOTE_USER is what both
+        # mod_auth_openidc and mod_shib populate by default, and unlike an HTTP header
+        # a client cannot set it.
+        'user_var'      => $get('sso_user_var', 'REMOTE_USER'),
+        # Server variables sourced from request headers (anything HTTP_*) are supplied
+        # by whoever made the request. Trusting one is only safe when a proxy in front
+        # is guaranteed to overwrite it, so it has to be opted into deliberately.
+        'allow_headers' => (int)$get('sso_allow_headers', '0'),
+        'strip_domain'  => (int)$get('sso_strip_domain', '1'),
+        'lowercase'     => (int)$get('sso_lowercase', '1'),
+        'autocreate'    => (int)$get('sso_autocreate', '0'),
+        'group_var'     => $get('sso_group_var', ''),
+        'admin_group'   => $get('sso_admin_group', ''),
+        'logout_url'    => $get('sso_logout_url', ''),
+        'button_label'  => $get('sso_button_label', 'Sign in with SSO'),
+    );
+}
+
+# True if reading this variable would mean trusting something the client sent.
+function uns_sso_var_is_header($name)
+{
+    return strpos((string)$name, 'HTTP_') === 0;
+}
+
+# The identity the web server established, or '' if it did not establish one.
+function uns_sso_identity($cfg, $server = null)
+{
+    if($server === null){$server = $_SERVER;}
+    $var = $cfg['user_var'];
+    if($var === ''){return '';}
+    if(uns_sso_var_is_header($var) && empty($cfg['allow_headers'])){return '';}
+    return isset($server[$var]) ? trim((string)$server[$var]) : '';
+}
+
+# Turns whatever the identity provider called the user into the name UNS matches
+# against allowed_users: DOMAIN\user and user@domain.example both reduce to "user"
+# when strip_domain is on.
+function uns_sso_normalize($raw, $cfg)
+{
+    $name = trim((string)$raw);
+    if($name === ''){return '';}
+
+    if(!empty($cfg['strip_domain']))
+    {
+        $slash = strrpos($name, "\\");
+        if($slash !== false){$name = substr($name, $slash + 1);}
+        $at = strpos($name, '@');
+        if($at !== false){$name = substr($name, 0, $at);}
+    }
+    if(!empty($cfg['lowercase'])){$name = strtolower($name);}
+
+    # allowed_users.username is compared as an exact string everywhere else, so refuse
+    # anything that is not a plausible account name rather than storing it.
+    if(!preg_match('/^[A-Za-z0-9._\-]{1,255}$/', $name)){return '';}
+    return $name;
+}
+
+# The groups the identity provider says the user is in. Providers disagree about the
+# separator - mod_auth_openidc joins a JSON array with commas, Shibboleth uses
+# semicolons - so all the common ones are accepted.
+function uns_sso_groups($cfg, $server = null)
+{
+    if($server === null){$server = $_SERVER;}
+    $var = $cfg['group_var'];
+    if($var === ''){return array();}
+    if(uns_sso_var_is_header($var) && empty($cfg['allow_headers'])){return array();}
+    if(!isset($server[$var])){return array();}
+
+    $parts = preg_split('/[;,\r\n]+/', (string)$server[$var]);
+    $out = array();
+    foreach($parts as $p)
+    {
+        $p = trim($p);
+        if($p !== ''){$out[] = $p;}
+    }
+    return $out;
+}
+
+function uns_sso_in_group($groups, $wanted)
+{
+    if($wanted === ''){return false;}
+    foreach($groups as $g)
+    {
+        if(strcasecmp($g, $wanted) === 0){return true;}
+    }
+    return false;
+}
+
 # --- Targeted emergency mode ------------------------------------------------
 #
 # settings.emerg is still the global switch: on, and every client shows the

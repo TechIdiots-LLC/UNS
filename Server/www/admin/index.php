@@ -63,9 +63,20 @@ if($func_1 === "logout")
         if($del_ok)
         {
             if(setcookie("login_yes", "", time()-3600 , "/".$root."admin", '', $SSL, 1))
-            {echo "Logged out";
+            {
+            # Ending the UNS session does not end the one the identity provider holds:
+            # without this, "log out" then "sign in with SSO" would silently put the
+            # same person straight back in. Where a logout URL is configured, hand the
+            # browser to it so the provider can close its session too.
+            $logout_to = $admin_url.'admin/index.php';
+            if(uns_auth_mode($conn, $driver, isset($LDAP) ? $LDAP : 0) === 'sso')
+            {
+                $sso_cfg = uns_sso_config($conn, $driver);
+                if($sso_cfg['logout_url'] !== ''){$logout_to = $sso_cfg['logout_url'];}
+            }
+            echo "Logged out";
             ?>
-       <script>location.href = '<?php echo $admin_url;?>admin/index.php';</script>
+       <script>location.href = '<?php echo $logout_to;?>';</script>
                     <?php
             die();}
         }else
@@ -629,7 +640,42 @@ function admin_panel($usr, $func, $proto)
             # These go in the uns_config table rather than vars.php, so they are covered by
             # the database backup and readable by the scheduled monitor without it needing
             # to read a PHP file out of the web root.
+            # --- Single sign-on -------------------------------------------------
+            $auth_mode1 = (string)@filter_input(INPUT_POST, 'auth_mode', FILTER_SANITIZE_SPECIAL_CHARS);
+            if(!in_array($auth_mode1, array('internal', 'ldap', 'sso'), true))
+            {
+                $auth_mode1 = $ldap1 ? 'ldap' : 'internal';
+            }
+            $sso_user_var1 = trim((string)@filter_input(INPUT_POST, 'sso_user_var', FILTER_SANITIZE_SPECIAL_CHARS));
+            if($sso_user_var1 === ''){$sso_user_var1 = 'REMOTE_USER';}
+            $sso_group_var1   = trim((string)@filter_input(INPUT_POST, 'sso_group_var', FILTER_SANITIZE_SPECIAL_CHARS));
+            $sso_admin_group1 = trim((string)@filter_input(INPUT_POST, 'sso_admin_group', FILTER_SANITIZE_SPECIAL_CHARS));
+            $sso_button1      = trim((string)@filter_input(INPUT_POST, 'sso_button_label', FILTER_SANITIZE_SPECIAL_CHARS));
+            if($sso_button1 === ''){$sso_button1 = 'Sign in with SSO';}
+
+            $sso_logout1 = trim((string)html_entity_decode(@filter_input(INPUT_POST, 'sso_logout_url', FILTER_SANITIZE_SPECIAL_CHARS)));
+            if($sso_logout1 !== '')
+            {
+                $lo_scheme = strtolower((string)parse_url($sso_logout1, PHP_URL_SCHEME));
+                if(!filter_var($sso_logout1, FILTER_VALIDATE_URL) || !in_array($lo_scheme, array('http', 'https'), true))
+                {
+                    echo "The single sign-on logout URL was not a valid http(s) URL and has been cleared.<br />\r\n";
+                    $sso_logout1 = '';
+                }
+            }
+
             $emerg_cfg = array(
+                'auth_mode'         => $auth_mode1,
+                'sso_user_var'      => $sso_user_var1,
+                'sso_allow_headers' => @filter_input(INPUT_POST, 'sso_allow_headers', FILTER_SANITIZE_ENCODED) ? 1 : 0,
+                'sso_strip_domain'  => @filter_input(INPUT_POST, 'sso_strip_domain', FILTER_SANITIZE_ENCODED) ? 1 : 0,
+                'sso_lowercase'     => @filter_input(INPUT_POST, 'sso_lowercase', FILTER_SANITIZE_ENCODED) ? 1 : 0,
+                'sso_autocreate'    => @filter_input(INPUT_POST, 'sso_autocreate', FILTER_SANITIZE_ENCODED) ? 1 : 0,
+                'sso_group_var'     => $sso_group_var1,
+                'sso_admin_group'   => $sso_admin_group1,
+                'sso_logout_url'    => $sso_logout1,
+                'sso_button_label'  => $sso_button1,
+
                 'emerg_feed_url'         => $emerg_feed_url1,
                 'emerg_display_minutes'  => $emerg_display_minutes1,
                 'emerg_publish_message'  => $emerg_publish_message1,
@@ -730,6 +776,20 @@ function admin_panel($usr, $func, $proto)
             $eo->assign('ef_severity', isset($ef_cfg['emerg_min_severity']) ? $ef_cfg['emerg_min_severity'] : 'Unknown');
             $eo->assign('ef_max',      isset($ef_cfg['emerg_max_items']) ? (int)$ef_cfg['emerg_max_items'] : 5);
             $eo->assign('ef_follow',   isset($ef_cfg['emerg_follow_cap_links']) ? (int)$ef_cfg['emerg_follow_cap_links'] : 1);
+
+            $sso_cfg = uns_sso_config($conn, $driver);
+            $eo->assign('auth_mode',      uns_auth_mode($conn, $driver, isset($LDAP) ? $LDAP : 0));
+            $eo->assign('sso_user_var',   $sso_cfg['user_var']);
+            $eo->assign('sso_allow_hdr',  $sso_cfg['allow_headers']);
+            $eo->assign('sso_strip',      $sso_cfg['strip_domain']);
+            $eo->assign('sso_lower',      $sso_cfg['lowercase']);
+            $eo->assign('sso_autocreate', $sso_cfg['autocreate']);
+            $eo->assign('sso_group_var',  $sso_cfg['group_var']);
+            $eo->assign('sso_admin_grp',  $sso_cfg['admin_group']);
+            $eo->assign('sso_logout',     $sso_cfg['logout_url']);
+            $eo->assign('sso_button',     $sso_cfg['button_label']);
+            # Shown as a diagnostic: what the web server is actually providing right now.
+            $eo->assign('sso_seen',       uns_sso_identity($sso_cfg));
             echo $eo->fetch('screens/edit_options.tpl');
             break;
         case "rss_feeds":
@@ -2925,33 +2985,19 @@ function create_cookie($username_login)
     
     if(!isset($driver)){$driver = 'mysql';}
     $conn = db_connect($server, $username, $password, $db, $driver);
-    $hash = bin2hex(random_bytes(16)); # session token - must be unguessable, hence a CSPRNG rather than mt_rand()
-    if($timeout > 0){$time = time()+$timeout;}else{$time = 0;}
 
-    if($root == "" or $root == "/"){$path = "/admin";}else{$path = "/".$root."admin";}
-
-    if(setcookie("login_yes", $hash.":".$username_login, $time , $path, '', $SSL, 1))
+    # The session itself is minted in shared.php, so this and admin/sso.php cannot
+    # drift apart on how a login is represented.
+    if(uns_create_session($conn, $username_login, $timeout, $root, $SSL))
     {
-        echo "Cookie Set\r\n";
-        $stmt = $conn->prepare("INSERT INTO hash_links (hash, time, username) VALUES (?, ?, ?)");
-        $result = $stmt->execute([$hash, $time, $username_login]);
-        if($result)
-        {
-            echo "<h1>Logged In</h1>";
-            ?>
-                <script>location.href = '<?php echo $admin_url;?>admin/index.php';</script>
-            <?php
-            return 1;
-        }else
-        {
-            echo db_error($conn)."\r\n";
-            return 0;
-        }
-    }else
-    {
-        echo "cookie eaten\r\n";
-        return 0;
+        echo "<h1>Logged In</h1>";
+        ?>
+            <script>location.href = '<?php echo $admin_url;?>admin/index.php';</script>
+        <?php
+        return 1;
     }
+    echo db_error($conn)."\r\n";
+    return 0;
 }
 
 function check_archives($client)
@@ -2995,6 +3041,25 @@ function login_form($mesg)
     # on output - the old inline version called htmlspecialchars() here instead.
     $smarty = uns_smarty();
     $smarty->assign('message', (string)$mesg);
+
+    # When single sign-on is on, offer it - but keep the password form, because it is
+    # the only way back in if the identity provider is unreachable.
+    $sso_on    = false;
+    $sso_label = 'Sign in with SSO';
+    include "../configs/vars.php";
+    include "../configs/conn.php";
+    if(!isset($driver)){$driver = 'mysql';}
+    $conn = db_connect($server, $username, $password, $db, $driver);
+    if($conn && uns_auth_mode($conn, $driver, isset($LDAP) ? $LDAP : 0) === 'sso')
+    {
+        $sso_cfg   = uns_sso_config($conn, $driver);
+        $sso_on    = true;
+        $sso_label = $sso_cfg['button_label'];
+    }
+    $smarty->assign('sso_on', $sso_on);
+    $smarty->assign('sso_label', $sso_label);
+    $smarty->assign('ldap_hint', !empty($LDAP));
+
     $smarty->display('login.tpl');
     die();
 }
