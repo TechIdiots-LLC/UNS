@@ -37,7 +37,10 @@ if($led_blink){blinky(get_client_led_id($client));}
 if($client != "")
 {
     $chosen_one = get_client_url($client);
-    $emerg = $chosen_one[2];
+    # get_client_url() returns a two-element array on its error paths (bad_client, a
+    # connection failure, no URLs) and a three-element one otherwise, so reading [2]
+    # unconditionally warned on every one of those requests.
+    $emerg = isset($chosen_one[2]) ? $chosen_one[2] : 0;
 }else
 {
     $emerg = 0;
@@ -280,7 +283,11 @@ function get_client_url($client)
         # the resolved list here covers group URLs too. If filtering empties the list
         # (a client with exactly one URL) the unfiltered list stands, which is what
         # the old fall-back query did.
-        $stmt = $conn->prepare("SELECT last_url FROM connections where client = ? ORDER by last_conn DESC");
+        # Ordered by id as well as time: last_conn only has second resolution, so two
+        # requests landing in the same second left "the previous URL" arbitrary and the
+        # no-repeat filter below picked the wrong one. All three drivers give
+        # connections an auto-incrementing id, which breaks the tie by actual order.
+        $stmt = $conn->prepare("SELECT last_url FROM connections where client = ? ORDER by last_conn DESC, id DESC");
         if($stmt && $stmt->execute([$client]))
         {
             $prev = $stmt->fetch(PDO::FETCH_ASSOC);

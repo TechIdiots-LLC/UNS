@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+  <identifier>TEST-EXERCISE-1</identifier>
+  <sender>test@example.org</sender>
+  <sent>2026-01-01T12:00:00-00:00</sent>
+  <status>Exercise</status>
+  <msgType>Alert</msgType>
+  <scope>Public</scope>
+  <info>
+    <category>Safety</category>
+    <event>Tornado Drill</event>
+    <urgency>Immediate</urgency>
+    <severity>Extreme</severity>
+    <certainty>Observed</certainty>
+    <expires>2099-01-01T00:00:00-00:00</expires>
+    <headline>Tornado drill in progress</headline>
+    <description>This is a drill.</description>
+  </info>
+</alert>

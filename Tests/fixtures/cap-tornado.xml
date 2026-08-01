@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+  <identifier>TEST-TORNADO-1</identifier>
+  <sender>w-nws.webmaster@noaa.gov</sender>
+  <sent>2026-01-01T12:00:00-00:00</sent>
+  <status>Actual</status>
+  <msgType>Alert</msgType>
+  <scope>Public</scope>
+  <info>
+    <category>Met</category>
+    <event>Tornado Warning</event>
+    <urgency>Immediate</urgency>
+    <severity>Extreme</severity>
+    <certainty>Observed</certainty>
+    <expires>2099-01-01T00:00:00-00:00</expires>
+    <headline>Tornado Warning for Riley County</headline>
+    <description>A tornado was sighted near the campus.</description>
+    <instruction>Move to a basement or interior room now.</instruction>
+    <area>
+      <areaDesc>Riley County</areaDesc>
+      <geocode><valueName>SAME</valueName><value>020161</value></geocode>
+    </area>
+    <area>
+      <areaDesc>Pottawatomie County</areaDesc>
+      <geocode><valueName>SAME</valueName><value>020149</value></geocode>
+    </area>
+  </info>
+</alert>

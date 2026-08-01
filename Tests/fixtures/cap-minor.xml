@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+  <identifier>TEST-MINOR-1</identifier>
+  <sender>test@example.org</sender>
+  <sent>2026-01-01T12:00:00-00:00</sent>
+  <status>Actual</status>
+  <msgType>Alert</msgType>
+  <scope>Public</scope>
+  <info>
+    <category>Infra</category>
+    <event>Water Main Break</event>
+    <urgency>Expected</urgency>
+    <severity>Minor</severity>
+    <certainty>Likely</certainty>
+    <expires>2099-01-01T00:00:00-00:00</expires>
+    <headline>Water main work on campus</headline>
+    <description>Water will be off in the west quad.</description>
+    <area>
+      <areaDesc>West Quad</areaDesc>
+      <geocode><valueName>SAME</valueName><value>020161</value></geocode>
+    </area>
+  </info>
+</alert>

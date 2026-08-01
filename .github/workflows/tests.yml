@@ -1,0 +1,73 @@
+name: Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Report every version's result rather than stopping at the first failure -
+      # knowing a change breaks 7.4 but not 8.3 is the whole point of the matrix.
+      fail-fast: false
+      matrix:
+        # 7.4 is the oldest version UNS supports, and what the reference production
+        # server runs. 8.4 is the newest release.
+        php: ['7.4', '8.1', '8.3', '8.4']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pdo, pdo_sqlite, sqlite3, curl, simplexml, mbstring
+          coverage: none
+
+      - name: Show version
+        run: php -v
+
+      # A parse error in a file the suite never loads would otherwise ship unnoticed,
+      # and this is what catches syntax that is too new for the oldest supported PHP.
+      - name: Lint every PHP file
+        run: |
+          set -e
+          fail=0
+          while IFS= read -r f; do
+            php -l "$f" > /dev/null || { echo "LINT FAILED: $f"; php -l "$f" || true; fail=1; }
+          done < <(find Server Scripts Tests -name '*.php' -type f)
+          exit $fail
+
+      - name: Run the test suite
+        run: php Tests/run-tests.php
+
+  lint-templates:
+    name: Smarty templates compile
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo, pdo_sqlite, mbstring
+          coverage: none
+
+      # The admin screens are only rendered by the tests that visit them. Compiling
+      # every template catches a syntax error in one nothing happened to exercise.
+      - name: Compile all templates
+        run: php Tests/compile-templates.php

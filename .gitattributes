@@ -1,22 +1,6 @@
-# Auto detect text files and perform LF normalization
-* text=auto
-
-# Custom for Visual Studio
-*.cs     diff=csharp
-*.sln    merge=union
-*.csproj merge=union
-*.vbproj merge=union
-*.fsproj merge=union
-*.dbproj merge=union
-
-# Standard to msysgit
-*.doc	 diff=astextplain
-*.DOC	 diff=astextplain
-*.docx diff=astextplain
-*.DOCX diff=astextplain
-*.dot  diff=astextplain
-*.DOT  diff=astextplain
-*.pdf  diff=astextplain
-*.PDF	 diff=astextplain
-*.rtf	 diff=astextplain
-*.RTF	 diff=astextplain
+# Keep development-only trees out of the release archives. The release workflow uses
+# `git archive`, which honours export-ignore, so without this the test suite and CI
+# definitions would ship inside every uns-<version>.zip that users download.
+Tests/          export-ignore
+.github/        export-ignore
+.gitattributes  export-ignore
