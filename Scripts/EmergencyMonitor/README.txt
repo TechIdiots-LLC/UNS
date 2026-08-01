@@ -83,6 +83,45 @@ What it changes in UNS
   AutoIt script did, and manage the emergency URL list yourself.
 
 
+Sending alerts to some screens instead of all of them
+-----------------------------------------------------
+By default an alert in force turns on the global emergency flag and every client
+shows the emergency URLs. That is still exactly what happens when no routing
+rules exist, so an existing install behaves as it always did.
+
+Add rules under Emergency Messages -> Alert Routing to narrow it. A rule reads
+"when <field> <test> <value>, send the alert to <group or client>", with an
+optional minimum severity. For example:
+
+    geocode  contains  020161   -> group "Riley Campus"   min severity Severe
+    category equals    Met      -> group "Outdoor Signs"
+    event    contains  Tornado  -> all clients            min severity Extreme
+
+The fields come from the CAP document: event, category, severity, urgency,
+certainty, areaDesc and the geocode values (SAME, FIPS6, UGC), plus sender,
+headline and description. CAP lets an alert carry several categories, areas and
+geocodes; a rule matches if any one of them matches. A plain RSS or Atom feed
+carries none of these, so only headline, description and sender are usable there.
+
+Once any rule exists, the global flag is only raised by a rule that explicitly
+targets all clients - otherwise an alert meant for one building would black out
+the whole estate. An alert matching no rule changes nothing; add a catch-all
+rule sending "all clients" with the test set to "anything" if you want the old
+behaviour alongside targeted ones.
+
+Each destination gets its own custom message, so two groups can be showing two
+different alerts at once.
+
+The monitor only clears emergencies it raised itself. An emergency switched on
+by hand in the admin panel carries source "manual" and is left alone, so a
+manual takeover is never cancelled by the next feed poll.
+
+Every emergency it raises carries an expiry - the CAP <expires> if the alert has
+one, otherwise the configured display time. The client page honours that expiry
+on its own, so if this script stops running mid-alert the screens stand
+themselves down instead of being stranded on it.
+
+
 Behaviour when the feed cannot be reached
 -----------------------------------------
 The monitor reports the problem and leaves emergency mode exactly as it is,

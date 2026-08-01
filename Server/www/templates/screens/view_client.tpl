@@ -79,6 +79,51 @@
                         <td><a class="links" href="{$client_url}" target="_blank">{$client_url}</a></td>
                     </tr>
                 </table>
+{if $groups|@count > 0}
+                <table border="1px" width="100%">
+                    <tr class="client_table_head"><th colspan="3">Groups this Client is in</th></tr>
+{foreach $groups as $g}
+                    <tr class="client_table_body">
+                        <td><a class="links" href="?func=edit_group&amp;group={$g.id}">{$g.name}</a></td>
+                        <td align="center">{if $g.mode == 'replace'}Replace{else}Add{/if}{if !$g.active} (parked){/if}</td>
+                        <td align="center">{if $g.emerg}<b>group emergency ON</b>{/if}</td>
+                    </tr>
+{/foreach}
+                </table>
+                <br />
+{/if}
+{if $can_emerg}
+                <table border="1px" width="100%">
+                    <tr class="{if $emerg_live}Emerg{else}client_table_head{/if}">
+                        <th>Emergency Mode for this Client
+{if $emerg_live}
+                            <br /><font size="4">This client is in emergency mode{if $emerg_until > 0}
+                            until {$emerg_until|date_format:"%Y-%m-%d %H:%M"}{/if}.</font>
+{else}
+                            <br /><font size="1">Puts only this screen onto the emergency URLs.</font>
+{/if}
+                        </th>
+                    </tr>
+                    <tr class="client_table_tail">
+                        <td align="center">
+                            <form name="client_emerg" action="?func=emerg_target_set" method="POST">
+                                <input type="hidden" name="scope" value="client:{$client_id}">
+                                <input type="hidden" name="back" value="func=view_client&amp;client={$client_id}">
+{if $emerg_live}
+                                <input type="hidden" name="on" value="0">
+                                <input type="submit" value="Clear Emergency for this Client">
+{else}
+                                <input type="hidden" name="on" value="1">
+                                for <input type="text" name="minutes" style="width:45px" value="0"> minutes
+                                <font size="1">(0 = until cleared)</font>
+                                <input type="submit" value="Set Emergency for this Client">
+{/if}
+                            </form>
+                        </td>
+                    </tr>
+                </table>
+                <br />
+{/if}
                 <hr />
 
                 <form name="client_edit" action="?func=edit_urls&amp;client={$client_id}&amp;cl_func=edit_proc" method="POST">

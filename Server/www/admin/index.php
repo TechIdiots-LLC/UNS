@@ -397,6 +397,7 @@ function admin_panel($usr, $func, $proto)
         # rather than adding a seventh column to allowed_users.
         array('perm' => 'edit_urls',    'label' => '',                   'href' => '?func=client_groups','text' => 'Client Groups'),
         array('perm' => 'edit_emerg',   'label' => 'Emergency Messages', 'href' => '?func=edit_emerg',   'text' => 'Emergency Messages'),
+        array('perm' => 'edit_emerg',   'label' => '',                   'href' => '?func=emerg_routes', 'text' => 'Alert Routing'),
         array('perm' => 'edit_users',   'label' => 'Edit Users',         'href' => '?func=view_users',   'text' => 'User Permissions'),
         array('perm' => 'c_messages',   'label' => 'Custom Messages',    'href' => '?func=c_messages',   'text' => 'Custom Messages'),
         array('perm' => 'rss_feeds',    'label' => 'RSS Feeds',          'href' => '?func=rss_feeds',    'text' => 'RSS Feeds'),
@@ -1466,26 +1467,75 @@ function admin_panel($usr, $func, $proto)
         case "edit_emerg":
             if($perms['edit_emerg'])
             {
+                uns_emerg_ensure($conn, $driver);
+
                 $es = $conn->query("SELECT emerg FROM settings");
                 $settings_row = $es ? $es->fetch(PDO::FETCH_ASSOC) : false;
+
+                # Names for the scope column, so a row reads "Building A" rather than
+                # "group:3".
+                $group_names = array();
+                $gn = $conn->query("SELECT id, name FROM client_groups");
+                if($gn){while($row = $gn->fetch(PDO::FETCH_ASSOC)){$group_names[(string)$row['id']] = $row['name'];}}
+                $client_names = array();
+                $cn = $conn->query("SELECT client, friendly FROM friendly");
+                if($cn){while($row = $cn->fetch(PDO::FETCH_ASSOC)){$client_names[$row['client']] = $row['friendly'];}}
 
                 $eu = $conn->query("SELECT * FROM emerg");
                 $emerg_all = $eu ? $eu->fetchAll(PDO::FETCH_ASSOC) : array();
                 $urls = array();
                 foreach($emerg_all as $row)
                 {
+                    $scope  = isset($row['scope']) && $row['scope'] !== '' ? $row['scope'] : 'all';
+                    $target = isset($row['target']) ? (string)$row['target'] : '';
+                    if($scope === 'group'){$scope_label = 'Group: '.($group_names[$target] ?? $target);}
+                    elseif($scope === 'client'){$scope_label = 'Client: '.($client_names[$target] ?? $target);}
+                    else{$scope_label = 'All clients';}
+
                     $urls[] = array(
-                        'id'      => (int)$row['id'],
-                        'url'     => $row['url'],
-                        'label'   => uns_url_label($conn, $host, $row['url']),
-                        'refresh' => (int)$row['refresh'],
-                        'enabled' => !empty($row['enabled']),
+                        'id'          => (int)$row['id'],
+                        'url'         => $row['url'],
+                        'label'       => uns_url_label($conn, $host, $row['url']),
+                        'refresh'     => (int)$row['refresh'],
+                        'enabled'     => !empty($row['enabled']),
+                        'scope_label' => $scope_label,
                     );
                 }
+
+                # Everything currently in a targeted emergency, so there is one place that
+                # answers "what is live right now?".
+                $now     = time();
+                $targets = array();
+                $ts = $conn->query("SELECT * FROM emerg_targets ORDER BY scope, target");
+                if($ts)
+                {
+                    while($row = $ts->fetch(PDO::FETCH_ASSOC))
+                    {
+                        $target = (string)$row['target'];
+                        $targets[] = array(
+                            'id'     => (int)$row['id'],
+                            'scope'  => $row['scope'],
+                            'target' => $target,
+                            'name'   => $row['scope'] === 'group'
+                                ? ($group_names[$target] ?? $target)
+                                : ($client_names[$target] ?? $target),
+                            'live'   => uns_emerg_target_live($row, $now),
+                            'until'  => (int)$row['until'],
+                            'source' => $row['source'],
+                        );
+                    }
+                }
+
+                # Scope choices for the "add URL" form.
+                $scopes = array(array('value' => 'all::', 'text' => 'All clients'));
+                foreach($group_names as $gid => $gname){$scopes[] = array('value' => 'group:'.$gid, 'text' => 'Group: '.$gname);}
+                foreach($client_names as $cid => $cname){$scopes[] = array('value' => 'client:'.$cid, 'text' => 'Client: '.$cname);}
 
                 $ee = uns_smarty();
                 $ee->assign('emerg_on', !empty($settings_row['emerg']));
                 $ee->assign('urls', $urls);
+                $ee->assign('targets', $targets);
+                $ee->assign('scopes', $scopes);
                 $ee->assign('refresh', (int)$refresh);
                 echo $ee->fetch('screens/edit_emerg.tpl');
             }else
@@ -1584,15 +1634,20 @@ function admin_panel($usr, $func, $proto)
         case "add_emerg":
             if($perms['edit_emerg'])
             {
+                uns_emerg_ensure($conn, $driver);
                 $urls = filter_input(INPUT_POST, 'URLS', FILTER_SANITIZE_SPECIAL_CHARS);
                 $refresh = (int)filter_input(INPUT_POST, 'refresh', FILTER_SANITIZE_SPECIAL_CHARS);
+
+                # "scope:target" from one select, so the two always travel together.
+                list($e_scope, $e_target) = uns_parse_scope(filter_input(INPUT_POST, 'scope', FILTER_SANITIZE_SPECIAL_CHARS));
+
                 $url_exp = explode("&#13;&#10;", $urls);
                 $i=0;
                 foreach($url_exp as $url_)
                 {
                     $url_ = trim($url_);
-                    $stmt = $conn->prepare("INSERT INTO emerg (url, enabled, refresh) VALUES (?, 1, ?)");
-                    if($stmt->execute([$url_, $refresh]))
+                    $stmt = $conn->prepare("INSERT INTO emerg (url, enabled, refresh, scope, target) VALUES (?, 1, ?, ?, ?)");
+                    if($stmt->execute([$url_, $refresh, $e_scope, $e_target]))
                     {
                         echo "Added: ".htmlspecialchars($url_, ENT_QUOTES)."<br />\r\n";
                         $i++;
@@ -1732,6 +1787,30 @@ function admin_panel($usr, $func, $proto)
                 }
 
                 $vc = uns_smarty();
+                # Emergency mode for this one client, independent of any group it is in.
+                uns_emerg_ensure($conn, $driver);
+                $ct_stmt = $conn->prepare("SELECT * FROM emerg_targets WHERE scope = 'client' AND target = ?");
+                $ct_row  = ($ct_stmt && $ct_stmt->execute([$client_get])) ? $ct_stmt->fetch(PDO::FETCH_ASSOC) : false;
+                $vc->assign('can_emerg',    !empty($perms['edit_emerg']));
+                $vc->assign('emerg_live',   $ct_row ? uns_emerg_target_live($ct_row, time()) : false);
+                $vc->assign('emerg_until',  $ct_row ? (int)$ct_row['until'] : 0);
+
+                # Groups this client belongs to, so it is obvious from here why a screen may
+                # be showing something its own list does not contain.
+                $memberships = array();
+                foreach(uns_client_groups($conn, $driver, $client_get) as $g)
+                {
+                    $gt = $conn->prepare("SELECT * FROM emerg_targets WHERE scope = 'group' AND target = ?");
+                    $gt_row = ($gt && $gt->execute([(string)$g['id']])) ? $gt->fetch(PDO::FETCH_ASSOC) : false;
+                    $memberships[] = array(
+                        'id'      => (int)$g['id'],
+                        'name'    => $g['name'],
+                        'mode'    => $g['mode'],
+                        'active'  => !empty($g['active']),
+                        'emerg'   => $gt_row ? uns_emerg_target_live($gt_row, time()) : false,
+                    );
+                }
+                $vc->assign('groups', $memberships);
                 $vc->assign('client_id',    $client_get);
                 $vc->assign('friendly',     $friendly['friendly'] ?? '');
                 $vc->assign('friendly_id',  (int)($friendly['id'] ?? 0));
@@ -2068,6 +2147,172 @@ function admin_panel($usr, $func, $proto)
                 echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
             }
             break;
+        case "emerg_target_set":
+            if($perms['edit_emerg'])
+            {
+                uns_emerg_ensure($conn, $driver);
+                list($t_scope, $t_target) = uns_parse_scope(filter_input(INPUT_POST, 'scope', FILTER_SANITIZE_SPECIAL_CHARS));
+                $t_on   = filter_input(INPUT_POST, 'on', FILTER_SANITIZE_ENCODED) ? 1 : 0;
+                $t_mins = (int)filter_input(INPUT_POST, 'minutes', FILTER_SANITIZE_ENCODED);
+                $back   = filter_input(INPUT_POST, 'back', FILTER_SANITIZE_SPECIAL_CHARS);
+                if($back === '' || $back === null){$back = 'func=edit_emerg';}
+
+                if($t_scope === 'all' || $t_target === '')
+                {
+                    echo "A targeted emergency needs a group or a client. Use the global switch for every screen at once.";
+                    uns_redirect($back, 3000);
+                    break;
+                }
+
+                # 0 minutes means "until somebody turns it off".
+                $until = ($t_on && $t_mins > 0) ? time() + ($t_mins * 60) : 0;
+
+                if(uns_emerg_target_set($conn, $driver, $t_scope, $t_target, $t_on, $until, 'manual', ''))
+                {
+                    echo ($t_on ? "Emergency mode ON for " : "Emergency mode cleared for ").$t_scope." "
+                        .htmlspecialchars($t_target, ENT_QUOTES)
+                        .($t_on && $until ? " (until ".date('Y-m-d H:i', $until).")" : "");
+                    uns_redirect($back, $page_timeout);
+                }else
+                {
+                    echo "Failed to change the targeted emergency.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
+                }
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
+        case "emerg_routes":
+            if($perms['edit_emerg'])
+            {
+                uns_emerg_ensure($conn, $driver);
+
+                $group_names = array();
+                $gn = $conn->query("SELECT id, name FROM client_groups ORDER BY name");
+                if($gn){while($row = $gn->fetch(PDO::FETCH_ASSOC)){$group_names[(string)$row['id']] = $row['name'];}}
+                $client_names = array();
+                $cn = $conn->query("SELECT client, friendly FROM friendly ORDER BY friendly");
+                if($cn){while($row = $cn->fetch(PDO::FETCH_ASSOC)){$client_names[$row['client']] = $row['friendly'];}}
+
+                $routes = array();
+                $rs = $conn->query("SELECT * FROM emerg_routes ORDER BY id");
+                if($rs)
+                {
+                    while($row = $rs->fetch(PDO::FETCH_ASSOC))
+                    {
+                        $target = (string)$row['target'];
+                        if($row['scope'] === 'group'){$where = 'Group: '.($group_names[$target] ?? $target);}
+                        elseif($row['scope'] === 'client'){$where = 'Client: '.($client_names[$target] ?? $target);}
+                        else{$where = 'All clients';}
+
+                        $routes[] = array(
+                            'id'      => (int)$row['id'],
+                            'name'    => $row['name'],
+                            'where'   => $where,
+                            'field'   => $row['field'],
+                            'op'      => $row['op'],
+                            'value'   => $row['value'],
+                            'sev'     => $row['min_severity'],
+                            'enabled' => !empty($row['enabled']),
+                        );
+                    }
+                }
+
+                $scopes = array(array('value' => 'all::', 'text' => 'All clients'));
+                foreach($group_names as $gid => $gname){$scopes[] = array('value' => 'group:'.$gid, 'text' => 'Group: '.$gname);}
+                foreach($client_names as $cid => $cname){$scopes[] = array('value' => 'client:'.$cid, 'text' => 'Client: '.$cname);}
+
+                $er = uns_smarty();
+                $er->assign('routes',     $routes);
+                $er->assign('scopes',     $scopes);
+                $er->assign('fields',     uns_route_fields());
+                $er->assign('ops',        uns_route_ops());
+                $er->assign('severities', array('Unknown', 'Minor', 'Moderate', 'Severe', 'Extreme'));
+                echo $er->fetch('screens/emerg_routes.tpl');
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
+        case "add_route":
+            if($perms['edit_emerg'])
+            {
+                uns_emerg_ensure($conn, $driver);
+                list($r_scope, $r_target) = uns_parse_scope(filter_input(INPUT_POST, 'scope', FILTER_SANITIZE_SPECIAL_CHARS));
+                $r_name  = trim((string)filter_input(INPUT_POST, 'name', FILTER_SANITIZE_SPECIAL_CHARS));
+                $r_field = (string)filter_input(INPUT_POST, 'field', FILTER_SANITIZE_SPECIAL_CHARS);
+                $r_op    = (string)filter_input(INPUT_POST, 'op', FILTER_SANITIZE_SPECIAL_CHARS);
+                $r_value = trim((string)filter_input(INPUT_POST, 'value', FILTER_SANITIZE_SPECIAL_CHARS));
+                $r_sev   = (string)filter_input(INPUT_POST, 'min_severity', FILTER_SANITIZE_SPECIAL_CHARS);
+
+                if(!array_key_exists($r_field, uns_route_fields())){$r_field = 'event';}
+                if(!array_key_exists($r_op, uns_route_ops())){$r_op = 'contains';}
+                if(!in_array($r_sev, array('Unknown', 'Minor', 'Moderate', 'Severe', 'Extreme'), true)){$r_sev = 'Unknown';}
+
+                # A regex that does not compile would throw on every monitor run, so it is
+                # rejected here rather than at 3am during an actual alert.
+                if($r_op === 'regex' && @preg_match('/'.str_replace('/', '\/', $r_value).'/i', '') === false)
+                {
+                    echo "That is not a valid regular expression.";
+                    uns_redirect('func=emerg_routes', 4000);
+                    break;
+                }
+                # An empty value would match everything, which is never what anyone means.
+                if($r_value === '' && $r_op !== 'any')
+                {
+                    echo "A rule needs something to match on.";
+                    uns_redirect('func=emerg_routes', 3000);
+                    break;
+                }
+
+                $stmt = $conn->prepare("INSERT INTO emerg_routes (name, scope, target, field, op, value, min_severity, enabled)"
+                    ." VALUES (?, ?, ?, ?, ?, ?, ?, 1)");
+                if($stmt && $stmt->execute([$r_name, $r_scope, $r_target, $r_field, $r_op, $r_value, $r_sev]))
+                {
+                    echo "Added the alert rule.";
+                    uns_redirect('func=emerg_routes', $page_timeout);
+                }else
+                {
+                    echo "Failed to add the rule.<br />".htmlspecialchars(db_error($conn), ENT_QUOTES);
+                }
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
+        case "update_routes":
+            if($perms['edit_emerg'])
+            {
+                uns_emerg_ensure($conn, $driver);
+                if(!empty($_POST['remove']) && !empty($_POST['routes']) && is_array($_POST['routes']))
+                {
+                    $del = $conn->prepare("DELETE FROM emerg_routes WHERE id = ?");
+                    foreach($_POST['routes'] as $rid){if($del){$del->execute([(int)$rid]);}}
+                    echo "Removed the selected rules.";
+                    uns_redirect('func=emerg_routes', $page_timeout);
+                    break;
+                }
+                # Same toggle-by-value pattern as the group URL list.
+                if(!empty($_POST['routes']) && is_array($_POST['routes']))
+                {
+                    $cur = $conn->prepare("SELECT enabled FROM emerg_routes WHERE id = ?");
+                    $upd = $conn->prepare("UPDATE emerg_routes SET enabled = ? WHERE id = ?");
+                    foreach($_POST['routes'] as $rid)
+                    {
+                        $rid = (int)$rid;
+                        if(!$cur || !$cur->execute([$rid])){continue;}
+                        $row = $cur->fetch(PDO::FETCH_ASSOC);
+                        if(!$row){continue;}
+                        if($upd){$upd->execute([empty($row['enabled']) ? 1 : 0, $rid]);}
+                    }
+                    echo "Updated the selected rules.";
+                }
+                uns_redirect('func=emerg_routes', $page_timeout);
+            }else
+            {
+                echo "Ummm, you shouldn't be here.. I think you should leave before the droids come. O_o";
+            }
+            break;
         case "client_groups":
             if($perms['edit_urls'])
             {
@@ -2210,7 +2455,16 @@ function admin_panel($usr, $func, $proto)
                     );
                 }
 
+                # Emergency mode for the group itself, shown only to users who are allowed
+                # to touch emergency settings at all.
+                uns_emerg_ensure($conn, $driver);
+                $et_stmt = $conn->prepare("SELECT * FROM emerg_targets WHERE scope = 'group' AND target = ?");
+                $et_row  = ($et_stmt && $et_stmt->execute([(string)$gid])) ? $et_stmt->fetch(PDO::FETCH_ASSOC) : false;
+
                 $eg = uns_smarty();
+                $eg->assign('can_emerg',   !empty($perms['edit_emerg']));
+                $eg->assign('emerg_live',  $et_row ? uns_emerg_target_live($et_row, time()) : false);
+                $eg->assign('emerg_until', $et_row ? (int)$et_row['until'] : 0);
                 $eg->assign('group',   array(
                     'id'          => (int)$group['id'],
                     'name'        => $group['name'],

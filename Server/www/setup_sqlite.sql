@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS emerg (
   url TEXT NOT NULL,
   enabled TINYINT NOT NULL DEFAULT 0,
   refresh INTEGER NOT NULL DEFAULT 30
+  ,scope VARCHAR(8) NOT NULL DEFAULT 'all'
+  ,target VARCHAR(255) NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS friendly (
@@ -126,4 +128,29 @@ CREATE TABLE IF NOT EXISTS group_links (
   disabled TINYINT NOT NULL DEFAULT 0,
   refresh INTEGER NOT NULL DEFAULT 60,
   UNIQUE (group_id, url)
+);
+
+-- Targeted emergency mode, see setup_mysql.sql for notes.
+CREATE TABLE IF NOT EXISTS emerg_targets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope VARCHAR(8) NOT NULL,
+  target VARCHAR(255) NOT NULL,
+  active TINYINT NOT NULL DEFAULT 0,
+  until INTEGER NOT NULL DEFAULT 0,
+  source VARCHAR(16) NOT NULL DEFAULT 'manual',
+  note VARCHAR(255) NOT NULL DEFAULT '',
+  updated INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (scope, target)
+);
+
+CREATE TABLE IF NOT EXISTS emerg_routes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name VARCHAR(255) NOT NULL DEFAULT '',
+  scope VARCHAR(8) NOT NULL DEFAULT 'all',
+  target VARCHAR(255) NOT NULL DEFAULT '',
+  field VARCHAR(16) NOT NULL DEFAULT 'event',
+  op VARCHAR(10) NOT NULL DEFAULT 'contains',
+  value VARCHAR(255) NOT NULL DEFAULT '',
+  min_severity VARCHAR(16) NOT NULL DEFAULT 'Unknown',
+  enabled TINYINT NOT NULL DEFAULT 1
 );

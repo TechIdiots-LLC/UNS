@@ -217,11 +217,8 @@ function uns_is_cap($xml)
 }
 
 # Severity is ranked so a minimum can be configured; anything unrecognised sorts lowest.
-function uns_severity_rank($severity)
-{
-    $order = array('Unknown' => 0, 'Minor' => 1, 'Moderate' => 2, 'Severe' => 3, 'Extreme' => 4);
-    return isset($order[$severity]) ? $order[$severity] : 0;
-}
+# uns_severity_rank() now lives in shared.php, shared with the routing rules so the
+# ladder can only be defined once.
 
 # Returns a normalised alert array, or null when the document is not usable.
 function uns_parse_cap($xml)
@@ -242,8 +239,15 @@ function uns_parse_cap($xml)
         'instruction' => '',
         'severity'    => '',
         'urgency'     => '',
+        'certainty'   => '',
         'expires'     => '',
         'web'         => '',
+        # Routing keys. CAP allows these to repeat - several categories on one alert,
+        # several areas, several geocodes per area - so they are arrays and a routing
+        # rule matches if ANY element matches.
+        'category'    => array(),
+        'area'        => array(),
+        'geocode'     => array(),
     );
 
     # A CAP alert may carry several <info> blocks (typically one per language).
@@ -258,8 +262,34 @@ function uns_parse_cap($xml)
         $alert['instruction'] = trim((string)$info->instruction);
         $alert['severity']    = trim((string)$info->severity);
         $alert['urgency']     = trim((string)$info->urgency);
+        $alert['certainty']   = trim((string)$info->certainty);
         $alert['expires']     = trim((string)$info->expires);
         $alert['web']         = trim((string)$info->web);
+
+        foreach($info->category as $c)
+        {
+            $c = trim((string)$c);
+            if($c !== ''){$alert['category'][] = $c;}
+        }
+
+        # <area> carries a human description plus zero or more <geocode> name/value
+        # pairs - SAME, FIPS6 and UGC codes are how you actually address a locality.
+        # Both the bare value and "NAME=value" are recorded, so a rule can be written
+        # either way round.
+        foreach($info->area as $area)
+        {
+            $desc = trim((string)$area->areaDesc);
+            if($desc !== ''){$alert['area'][] = $desc;}
+
+            foreach($area->geocode as $geo)
+            {
+                $gname = trim((string)$geo->valueName);
+                $gval  = trim((string)$geo->value);
+                if($gval === ''){continue;}
+                $alert['geocode'][] = $gval;
+                if($gname !== ''){$alert['geocode'][] = $gname.'='.$gval;}
+            }
+        }
     }
     return $alert;
 }
@@ -330,9 +360,16 @@ function uns_item_to_alert($item, $kind)
         'instruction' => '',
         'severity'    => '',
         'urgency'     => '',
+        'certainty'   => '',
         'expires'     => '',
         'web'         => $link,
         'link'        => $link,
+        # A plain RSS/Atom entry has none of the CAP routing fields. They are still
+        # present and empty so a routing rule can be evaluated against any alert
+        # without having to care where it came from - it simply won't match.
+        'category'    => array(),
+        'area'        => array(),
+        'geocode'     => array(),
     );
 }
 
@@ -520,20 +557,140 @@ if($GLOBALS['uns_verbose'])
     uns_log("  severity   : ".($alert['severity'] !== '' ? $alert['severity'] : '(none)'));
     uns_log("  sent       : ".($alert['sent'] !== '' ? $alert['sent'] : '(none)'));
     uns_log("  expires    : ".($alert['expires'] !== '' ? $alert['expires'] : '(none)'));
+    uns_log("  certainty  : ".($alert['certainty'] !== '' ? $alert['certainty'] : '(none)'));
+    uns_log("  category   : ".($alert['category'] ? implode(', ', $alert['category']) : '(none)'));
+    uns_log("  area       : ".($alert['area'] ? implode('; ', $alert['area']) : '(none)'));
+    uns_log("  geocode    : ".($alert['geocode'] ? implode(', ', $alert['geocode']) : '(none)'));
 }
 
 # ---------------------------------------------------------------------------
-# Apply to UNS
+# Work out who this alert is for
 # ---------------------------------------------------------------------------
+# Every alert still in force is matched against the routing rules. A rule names a
+# group or a client, so one alert can light up part of the estate and leave the rest
+# alone. With no rules configured at all, this falls straight back to the original
+# behaviour: drive the single global switch.
+uns_emerg_ensure($conn, $driver);
+
+$routes = array();
+$r_stmt = $conn->query("SELECT * FROM emerg_routes WHERE enabled = '1'");
+if($r_stmt){while($r_row = $r_stmt->fetch(PDO::FETCH_ASSOC)){$routes[] = $r_row;}}
+
+$routing   = !empty($routes);
+$hit_global = false;
+$hits       = array();   # "scope\ttarget" => the alert that matched it
+
+if($routing)
+{
+    foreach($alerts as $candidate)
+    {
+        $c_why = '';
+        if(!uns_alert_is_active($candidate, $now, $display_minutes, $allowed_status, $min_severity, $c_why)){continue;}
+
+        foreach($routes as $route)
+        {
+            if(!uns_route_matches($route, $candidate)){continue;}
+
+            $label = ($route['name'] !== '' ? $route['name'] : 'rule #'.$route['id']);
+            if($route['scope'] === 'all')
+            {
+                $hit_global = true;
+                uns_log("  ".$label." -> ALL clients"
+                    .($candidate['headline'] !== '' ? "  [".$candidate['headline']."]" : ""), false);
+                continue;
+            }
+
+            $key = $route['scope']."\t".$route['target'];
+            # Several alerts can route to the same screens; keep the most severe, which
+            # is the one whose text gets published there.
+            if(!isset($hits[$key]) || uns_alert_beats($candidate, $hits[$key]))
+            {
+                $hits[$key] = $candidate;
+            }
+            uns_log("  ".$label." -> ".$route['scope']." ".$route['target']
+                .($candidate['headline'] !== '' ? "  [".$candidate['headline']."]" : ""), false);
+        }
+    }
+
+    if(!$hit_global && !$hits)
+    {
+        uns_log($active
+            ? "An alert is in force but no routing rule matched it; nothing was changed."
+            : "Nothing in force and no routes matched.", $active);
+    }
+}
+
 $cur_stmt = $conn->query("SELECT emerg FROM settings");
 $cur_row  = $cur_stmt ? $cur_stmt->fetch(PDO::FETCH_ASSOC) : false;
 $current  = $cur_row ? (int)$cur_row['emerg'] : 0;
-$target   = $active ? 1 : 0;
+
+# Without routes the global switch follows the alert, as it always did. With routes,
+# the global switch is only driven by a rule that explicitly targets every client -
+# otherwise a targeted alert would black out the whole estate.
+$target = $routing ? ($hit_global ? 1 : 0) : ($active ? 1 : 0);
+
+# Anything the monitor previously raised that no longer matches has to come back down.
+$stale = array();
+$ex = $conn->query("SELECT * FROM emerg_targets WHERE source = 'monitor' AND active = '1'");
+if($ex)
+{
+    while($ex_row = $ex->fetch(PDO::FETCH_ASSOC))
+    {
+        $key = $ex_row['scope']."\t".$ex_row['target'];
+        if(!isset($hits[$key])){$stale[] = $ex_row;}
+    }
+}
 
 if($dry_run)
 {
-    uns_log("DRY RUN: emergency mode would be ".($target ? "ON" : "OFF")." (currently ".($current ? "ON" : "OFF")."); ".$why);
+    uns_log("DRY RUN: global emergency would be ".($target ? "ON" : "OFF")." (currently ".($current ? "ON" : "OFF")."); ".$why);
+    foreach($hits as $key => $hit_alert)
+    {
+        list($h_scope, $h_target) = explode("\t", $key, 2);
+        uns_log("DRY RUN: would raise emergency for ".$h_scope." ".$h_target);
+    }
+    foreach($stale as $s_row)
+    {
+        uns_log("DRY RUN: would clear emergency for ".$s_row['scope']." ".$s_row['target']);
+    }
     exit(UNS_OK);
+}
+
+# ---------------------------------------------------------------------------
+# Raise and clear the targeted emergencies
+# ---------------------------------------------------------------------------
+# The expiry is stored with the row so the client page can stand it down on its own.
+# If this script stops running mid-alert, screens recover instead of being stranded.
+foreach($hits as $key => $hit_alert)
+{
+    list($h_scope, $h_target) = explode("\t", $key, 2);
+
+    $until = 0;
+    if($hit_alert['expires'] !== '')
+    {
+        $ts = strtotime($hit_alert['expires']);
+        if($ts !== false){$until = $ts;}
+    }
+    if($until <= 0){$until = $now + ($display_minutes * 60);}
+
+    if(uns_emerg_target_set($conn, $driver, $h_scope, $h_target, 1, $until, 'monitor', $hit_alert['headline']))
+    {
+        uns_log("Emergency ON for ".$h_scope." ".$h_target." until ".date('Y-m-d H:i', $until));
+    }
+    else
+    {
+        uns_log("WARNING: could not raise the emergency for ".$h_scope." ".$h_target.": ".db_error($conn));
+    }
+}
+
+# Only ever stand down what this script raised. An emergency an administrator set by
+# hand carries source 'manual' and is left strictly alone.
+foreach($stale as $s_row)
+{
+    if(uns_emerg_target_set($conn, $driver, $s_row['scope'], $s_row['target'], 0, 0, 'monitor', ''))
+    {
+        uns_log("Emergency cleared for ".$s_row['scope']." ".$s_row['target']);
+    }
 }
 
 if($current !== $target)
@@ -550,6 +707,26 @@ else
     uns_log("Emergency mode already ".($target ? "ON" : "OFF").": ".$why, false);
 }
 
+# Give the global switch an expiry as well, for the same reason the targets have one:
+# if this script stops running while an alert is up, the client page can still stand
+# the alert down by itself instead of leaving every screen stuck on it.
+if($target)
+{
+    $global_until = 0;
+    if($alert['expires'] !== '')
+    {
+        $ts = strtotime($alert['expires']);
+        if($ts !== false){$global_until = $ts;}
+    }
+    if($global_until <= 0){$global_until = $now + ($display_minutes * 60);}
+    uns_config_set($conn, $driver, 'emerg_global_until', $global_until);
+}
+else
+{
+    # 0 means "no expiry", which is what a manually-set global emergency needs.
+    uns_config_set($conn, $driver, 'emerg_global_until', 0);
+}
+
 # ---------------------------------------------------------------------------
 # Publish the alert text as a custom message, and point an emergency URL at it
 # ---------------------------------------------------------------------------
@@ -559,54 +736,97 @@ if($publish_message)
     $proto   = (!empty($SSL) ? 'https://' : 'http://');
     $reg_url = 'http://'.$host.$root;   # client pages stay on http, matching gen_base_urls()
 
-    $body  = '<h1>'.htmlspecialchars($alert['headline'] !== '' ? $alert['headline'] : 'Emergency Alert', ENT_QUOTES).'</h1>';
-    if($alert['event'] !== ''){$body .= '<h3>'.htmlspecialchars($alert['event'], ENT_QUOTES).'</h3>';}
-    if($alert['description'] !== ''){$body .= '<p>'.nl2br(htmlspecialchars($alert['description'], ENT_QUOTES)).'</p>';}
-    if($alert['instruction'] !== ''){$body .= '<p><b>'.nl2br(htmlspecialchars($alert['instruction'], ENT_QUOTES)).'</b></p>';}
-    if($alert['severity'] !== '' || $alert['urgency'] !== '')
+    # One message per destination, because different groups can be showing different
+    # alerts at the same time - a tornado warning in one building and a lockdown in
+    # another must not overwrite each other's text.
+    #
+    # Each entry is [scope, target, alert, on]. Without routing there is exactly one,
+    # the global message, which keeps the row name and behaviour identical to before.
+    $publish = array();
+    if($routing)
     {
-        $body .= '<p><i>'.htmlspecialchars(trim($alert['severity'].' '.$alert['urgency']), ENT_QUOTES).'</i></p>';
-    }
-    if($alert['sender'] !== ''){$body .= '<p><small>'.htmlspecialchars($alert['sender'], ENT_QUOTES).'</small></p>';}
-
-    # Reuse one row rather than accumulating a message per alert.
-    $find = $conn->prepare("SELECT id FROM c_messages WHERE name = ?");
-    $msg_id = 0;
-    if($find && $find->execute(array($message_name)))
-    {
-        $row = $find->fetch(PDO::FETCH_ASSOC);
-        if($row){$msg_id = (int)$row['id'];}
-    }
-
-    if($msg_id > 0)
-    {
-        $up = $conn->prepare("UPDATE c_messages SET body = ?, refresh = ?, wrapper = 1 WHERE id = ?");
-        if(!$up || !$up->execute(array($body, (int)$message_refresh, $msg_id)))
+        if($hit_global){$publish[] = array('all', '', $alert, 1);}
+        foreach($hits as $key => $hit_alert)
         {
-            uns_log("WARNING: could not update the custom message: ".db_error($up ? $up : $conn));
+            list($h_scope, $h_target) = explode("\t", $key, 2);
+            $publish[] = array($h_scope, $h_target, $hit_alert, 1);
         }
+        if(!$target && !$hit_global){$publish[] = array('all', '', $alert, 0);}
     }
     else
     {
-        $ins = $conn->prepare("INSERT INTO c_messages (name, body, refresh, wrapper) VALUES (?, ?, ?, 1)");
-        if($ins && $ins->execute(array($message_name, $body, (int)$message_refresh)))
-        {
-            $msg_id = (int)$conn->lastInsertId();
-        }
-        else
-        {
-            uns_log("WARNING: could not create the custom message: ".db_error($ins ? $ins : $conn));
-        }
+        $publish[] = array('all', '', $alert, $target);
     }
 
-    if($msg_id > 0)
+    # Disable the messages belonging to targets that have just been stood down. This
+    # sits outside the routing branch on purpose: turning every rule off drops
+    # $routing back to false, and the stand-down still has to publish through, or the
+    # emergency URL rows stay enabled and the next manual emergency for that group
+    # would show the last alert the monitor left behind.
+    foreach($stale as $s_row)
     {
+        $publish[] = array($s_row['scope'], $s_row['target'], $alert, 0);
+    }
+
+    foreach($publish as $entry)
+    {
+        list($p_scope, $p_target, $p_alert, $p_on) = $entry;
+
+        # The global row keeps the configured name so existing installs carry on using
+        # the same c_message; targeted ones get a suffix so each has its own row.
+        $p_name = ($p_scope === 'all') ? $message_name : $message_name.' ['.$p_scope.':'.$p_target.']';
+
+        $body  = '<h1>'.htmlspecialchars($p_alert['headline'] !== '' ? $p_alert['headline'] : 'Emergency Alert', ENT_QUOTES).'</h1>';
+        if($p_alert['event'] !== ''){$body .= '<h3>'.htmlspecialchars($p_alert['event'], ENT_QUOTES).'</h3>';}
+        if($p_alert['description'] !== ''){$body .= '<p>'.nl2br(htmlspecialchars($p_alert['description'], ENT_QUOTES)).'</p>';}
+        if($p_alert['instruction'] !== ''){$body .= '<p><b>'.nl2br(htmlspecialchars($p_alert['instruction'], ENT_QUOTES)).'</b></p>';}
+        if($p_alert['severity'] !== '' || $p_alert['urgency'] !== '')
+        {
+            $body .= '<p><i>'.htmlspecialchars(trim($p_alert['severity'].' '.$p_alert['urgency']), ENT_QUOTES).'</i></p>';
+        }
+        if($p_alert['sender'] !== ''){$body .= '<p><small>'.htmlspecialchars($p_alert['sender'], ENT_QUOTES).'</small></p>';}
+
+        # Reuse one row per destination rather than accumulating a message per alert.
+        $find = $conn->prepare("SELECT id FROM c_messages WHERE name = ?");
+        $msg_id = 0;
+        if($find && $find->execute(array($p_name)))
+        {
+            $row = $find->fetch(PDO::FETCH_ASSOC);
+            if($row){$msg_id = (int)$row['id'];}
+        }
+
+        if($msg_id > 0)
+        {
+            $up = $conn->prepare("UPDATE c_messages SET body = ?, refresh = ?, wrapper = 1 WHERE id = ?");
+            if(!$up || !$up->execute(array($body, (int)$message_refresh, $msg_id)))
+            {
+                uns_log("WARNING: could not update the custom message: ".db_error($up ? $up : $conn));
+            }
+        }
+        elseif($p_on)
+        {
+            # Only create a message when there is actually an alert to show on it.
+            $ins = $conn->prepare("INSERT INTO c_messages (name, body, refresh, wrapper) VALUES (?, ?, ?, 1)");
+            if($ins && $ins->execute(array($p_name, $body, (int)$message_refresh)))
+            {
+                $msg_id = (int)$conn->lastInsertId();
+            }
+            else
+            {
+                uns_log("WARNING: could not create the custom message: ".db_error($ins ? $ins : $conn));
+            }
+        }
+
+        if($msg_id <= 0){continue;}
+
         $msg_url = $reg_url.'html/template.php?type=c_message&id='.$msg_id;
 
         # Only ever touch our own row, so emergency URLs added by hand are left alone.
-        $find_u = $conn->prepare("SELECT id FROM emerg WHERE url = ?");
+        # Matched on scope and target as well as the URL, so the same message pointed at
+        # two destinations keeps a row per destination.
+        $find_u = $conn->prepare("SELECT id FROM emerg WHERE url = ? AND scope = ? AND target = ?");
         $emerg_id = 0;
-        if($find_u && $find_u->execute(array($msg_url)))
+        if($find_u && $find_u->execute(array($msg_url, $p_scope, $p_target)))
         {
             $row = $find_u->fetch(PDO::FETCH_ASSOC);
             if($row){$emerg_id = (int)$row['id'];}
@@ -615,16 +835,16 @@ if($publish_message)
         if($emerg_id > 0)
         {
             $up_u = $conn->prepare("UPDATE emerg SET enabled = ?, refresh = ? WHERE id = ?");
-            if($up_u){$up_u->execute(array($target, (int)$message_refresh, $emerg_id));}
+            if($up_u){$up_u->execute(array($p_on ? 1 : 0, (int)$message_refresh, $emerg_id));}
         }
-        elseif($target)
+        elseif($p_on)
         {
-            # Only create the emergency URL when there is actually something to show.
-            $ins_u = $conn->prepare("INSERT INTO emerg (url, enabled, refresh) VALUES (?, 1, ?)");
-            if($ins_u){$ins_u->execute(array($msg_url, (int)$message_refresh));}
+            $ins_u = $conn->prepare("INSERT INTO emerg (url, enabled, refresh, scope, target) VALUES (?, 1, ?, ?, ?)");
+            if($ins_u){$ins_u->execute(array($msg_url, (int)$message_refresh, $p_scope, $p_target));}
         }
 
-        uns_log("Alert message ".($target ? "published at " : "left in place, disabled: ").$msg_url, false);
+        uns_log("Alert message for ".$p_scope.($p_target !== '' ? " ".$p_target : "")." "
+            .($p_on ? "published at " : "disabled: ").$msg_url, false);
     }
 }
 

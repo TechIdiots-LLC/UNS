@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS `emerg` (
   `url` text COLLATE utf8_bin NOT NULL,
   `enabled` tinyint(4) NOT NULL DEFAULT '0',
   `refresh` int(255) NOT NULL DEFAULT '30',
+  `scope` varchar(8) NOT NULL DEFAULT 'all',
+  `target` varchar(255) NOT NULL DEFAULT '',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB  DEFAULT CHARSET=utf8 AUTO_INCREMENT=0;
 
@@ -238,4 +240,60 @@ CREATE TABLE IF NOT EXISTS `group_links` (
   `refresh` int(5) NOT NULL DEFAULT '60',
   PRIMARY KEY (`id`),
   UNIQUE KEY `group_url` (`group_id`, `url`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 AUTO_INCREMENT=0;
+
+-- --------------------------------------------------------
+
+--
+-- Targeted emergency mode
+--
+-- settings.emerg remains the global switch that puts every client into emergency
+-- mode. emerg_targets narrows it: a row here is a live emergency for one group or
+-- one client, leaving every other screen on its normal rotation.
+--
+--   scope   'group' or 'client'
+--   target  the client_groups.id, or the client_name
+--   until   unix time the emergency lapses; 0 means it stays until cleared.
+--           Alerts carry their own expiry, and the client page treats a lapsed row
+--           as inactive, so a monitor that dies cannot strand screens on an alert.
+--   source  'manual' for an administrator, 'monitor' for the feed daemon. The
+--           daemon only ever clears what it raised, so a hand-set takeover is
+--           never stomped by the next feed poll.
+--
+-- The emerg URL rows are scoped the same way; a target with no URLs of its own
+-- falls back to the scope='all' list.
+--
+
+CREATE TABLE IF NOT EXISTS `emerg_targets` (
+  `id` int(255) NOT NULL AUTO_INCREMENT,
+  `scope` varchar(8) NOT NULL,
+  `target` varchar(255) NOT NULL,
+  `active` tinyint(4) NOT NULL DEFAULT '0',
+  `until` int(11) NOT NULL DEFAULT '0',
+  `source` varchar(16) NOT NULL DEFAULT 'manual',
+  `note` varchar(255) NOT NULL DEFAULT '',
+  `updated` int(11) NOT NULL DEFAULT '0',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `scope_target` (`scope`, `target`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 AUTO_INCREMENT=0;
+
+--
+-- Which alerts reach which screens.
+--
+-- Each row says "an alert whose <field> <op> <value> raises emergency mode for
+-- <scope>:<target>". With no rows configured the monitor behaves exactly as it did
+-- before targeting existed and drives the global flag only.
+--
+
+CREATE TABLE IF NOT EXISTS `emerg_routes` (
+  `id` int(255) NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) NOT NULL DEFAULT '',
+  `scope` varchar(8) NOT NULL DEFAULT 'all',
+  `target` varchar(255) NOT NULL DEFAULT '',
+  `field` varchar(16) NOT NULL DEFAULT 'event',
+  `op` varchar(10) NOT NULL DEFAULT 'contains',
+  `value` varchar(255) NOT NULL DEFAULT '',
+  `min_severity` varchar(16) NOT NULL DEFAULT 'Unknown',
+  `enabled` tinyint(4) NOT NULL DEFAULT '1',
+  PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 AUTO_INCREMENT=0;

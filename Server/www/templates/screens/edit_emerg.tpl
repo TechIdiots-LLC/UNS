@@ -31,13 +31,68 @@
                         </th>
                     </tr>
                 </table>
+                <table border="1px" width="100%">
+                    <tr class="client_table_head">
+                        <th colspan="4">Targeted Emergencies
+                            <br /><font size="1">Emergency mode for one group or one client, leaving every
+                            other screen on its normal rotation. The global switch above overrides these.</font></th>
+                    </tr>
+{if $targets|@count == 0}
+                    <tr>
+                        <td align="center" colspan="4">Nothing is targeted right now.</td>
+                    </tr>
+{else}
+                    <tr class="client_table_head">
+                        <th>Scope</th><th>Name</th><th>State</th><th width="1px">Turn off</th>
+                    </tr>
+{foreach $targets as $t}
+                    <tr class="client_table_body">
+                        <td align="center">{$t.scope}</td>
+                        <td>{$t.name}</td>
+                        <td align="center">
+{if $t.live}<b>ON</b>{if $t.until > 0} until {$t.until|date_format:"%Y-%m-%d %H:%M"}{/if}
+{else}off{/if}
+                            <font size="1">({$t.source})</font>
+                        </td>
+                        <td align="center">
+{if $t.live}
+                            <form name="target_off_{$t.id}" action="?func=emerg_target_set" method="POST">
+                                <input type="hidden" name="scope" value="{$t.scope}:{$t.target}">
+                                <input type="hidden" name="on" value="0">
+                                <input type="submit" value="Clear">
+                            </form>
+{/if}
+                        </td>
+                    </tr>
+{/foreach}
+{/if}
+                    <tr class="client_table_tail">
+                        <td colspan="4" align="center">
+                            <form name="target_on" action="?func=emerg_target_set" method="POST">
+                                Put
+                                <select name="scope">
+{foreach $scopes as $sc}
+{if $sc.value != 'all::'}
+                                    <option value="{$sc.value}">{$sc.text}</option>
+{/if}
+{/foreach}
+                                </select>
+                                into emergency mode for
+                                <input type="text" name="minutes" style="width:45px" value="0"> minutes
+                                <font size="1">(0 = until cleared)</font>
+                                <input type="hidden" name="on" value="1">
+                                <input type="submit" value="Go">
+                            </form>
+                        </td>
+                    </tr>
+                </table>
                 <hr />
                 <table border="1px" width="100%">
                     <tr class="client_table_head">
-                        <th colspan="6">Edit Emergency Messages for all Clients</th>
+                        <th colspan="6">Emergency Messages</th>
                     </tr>
                     <tr class="client_table_head">
-                        <th width="50px">Enabled?</th><th width="700px">URL</th><th width="90px">Refresh Time</th><th width="90px">Options</th>
+                        <th width="50px">Enabled?</th><th width="700px">URL</th><th width="120px">Shown to</th><th width="90px">Refresh Time</th><th width="90px">Options</th>
                     </tr>
 {if $urls|@count == 0}
                     <tr>
@@ -51,6 +106,7 @@
                         <td>
                             <a class="links" href="{$u.url}" target="_blank">{$u.url}</a>{if $u.label != ''} ({$u.label}){/if}
                         </td>
+                        <td align="center">{$u.scope_label}</td>
                         <td align="center">
                             <input type="hidden" name="url_id[]" value="{$u.id}">
                             <input type="text" name="refresh_t[]" style="width: 49px" value="{$u.refresh}">
@@ -94,6 +150,17 @@
                                 <tr>
                                     <td valign="center">Refresh Times for all:</td>
                                     <td><input type="text" name="refresh" value="{$refresh}"></td>
+                                </tr>
+                                <tr>
+                                    <td valign="center">Shown to:</td>
+                                    <td>
+                                        <select name="scope">
+{foreach $scopes as $sc}
+                                            <option value="{$sc.value}">{$sc.text}</option>
+{/foreach}
+                                        </select>
+                                        <font size="1">A group or client with no URLs of its own falls back to the All clients list.</font>
+                                    </td>
                                 </tr>
                                 <tr>
                                     <td></td>

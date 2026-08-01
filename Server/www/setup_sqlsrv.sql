@@ -54,6 +54,8 @@ CREATE TABLE emerg (
   url NVARCHAR(MAX) NOT NULL,
   enabled TINYINT NOT NULL DEFAULT 0,
   refresh INT NOT NULL DEFAULT 30
+  ,scope VARCHAR(8) NOT NULL DEFAULT 'all'
+  ,target VARCHAR(255) NOT NULL DEFAULT ''
 );
 
 IF OBJECT_ID('friendly', 'U') IS NULL
@@ -142,4 +144,31 @@ CREATE TABLE group_links (
   disabled TINYINT NOT NULL DEFAULT 0,
   refresh INT NOT NULL DEFAULT 60,
   CONSTRAINT group_url UNIQUE (group_id, url)
+);
+
+-- Targeted emergency mode, see setup_mysql.sql for notes.
+IF OBJECT_ID('emerg_targets', 'U') IS NULL
+CREATE TABLE emerg_targets (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  scope VARCHAR(8) NOT NULL,
+  target VARCHAR(255) NOT NULL,
+  active TINYINT NOT NULL DEFAULT 0,
+  until INT NOT NULL DEFAULT 0,
+  source VARCHAR(16) NOT NULL DEFAULT 'manual',
+  note VARCHAR(255) NOT NULL DEFAULT '',
+  updated INT NOT NULL DEFAULT 0,
+  CONSTRAINT scope_target UNIQUE (scope, target)
+);
+
+IF OBJECT_ID('emerg_routes', 'U') IS NULL
+CREATE TABLE emerg_routes (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL DEFAULT '',
+  scope VARCHAR(8) NOT NULL DEFAULT 'all',
+  target VARCHAR(255) NOT NULL DEFAULT '',
+  field VARCHAR(16) NOT NULL DEFAULT 'event',
+  op VARCHAR(10) NOT NULL DEFAULT 'contains',
+  value VARCHAR(255) NOT NULL DEFAULT '',
+  min_severity VARCHAR(16) NOT NULL DEFAULT 'Unknown',
+  enabled TINYINT NOT NULL DEFAULT 1
 );

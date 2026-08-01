@@ -616,6 +616,395 @@ function uns_groups_forget_client($conn, $driver, $client)
     return $stmt ? $stmt->execute(array($client)) : false;
 }
 
+# --- Targeted emergency mode ------------------------------------------------
+#
+# settings.emerg is still the global switch: on, and every client shows the
+# emergency list. emerg_targets narrows it, holding one row per group or client
+# that is currently in emergency mode on its own.
+#
+# Precedence for a client is global, then its own target row, then the highest
+# priority group it belongs to that has one. The emergency URLs are scoped the
+# same way, and a target with no URLs of its own falls back to the shared list,
+# so a group emergency still shows something before anyone curates URLs for it.
+
+# True if a column already exists. Driver-specific because there is no portable way
+# to ask, and the answer decides whether ALTER TABLE needs to run at all.
+function uns_column_exists($conn, $driver, $table, $column)
+{
+    switch($driver)
+    {
+        case 'sqlite':
+            $stmt = $conn->query("PRAGMA table_info(".$table.")");
+            if(!$stmt){return false;}
+            while($row = $stmt->fetch(PDO::FETCH_ASSOC))
+            {
+                if(isset($row['name']) && strcasecmp($row['name'], $column) === 0){return true;}
+            }
+            return false;
+        case 'sqlsrv':
+            $stmt = $conn->prepare("SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?");
+            if(!$stmt || !$stmt->execute(array($table, $column))){return false;}
+            return (bool)$stmt->fetch(PDO::FETCH_ASSOC);
+        case 'mysql':
+        default:
+            $stmt = $conn->prepare("SELECT 1 FROM information_schema.COLUMNS"
+                ." WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+            if(!$stmt || !$stmt->execute(array($table, $column))){return false;}
+            return (bool)$stmt->fetch(PDO::FETCH_ASSOC);
+    }
+}
+
+# Adds a column if it isn't there. $table/$column are literals from this file, never
+# user input - they cannot be parameterized as identifiers.
+function uns_ensure_column($conn, $driver, $table, $column, $definition)
+{
+    if(uns_column_exists($conn, $driver, $table, $column)){return true;}
+    return $conn->exec("ALTER TABLE ".$table." ADD ".$column." ".$definition) !== false;
+}
+
+function db_create_emerg_tables($conn, $driver)
+{
+    switch($driver)
+    {
+        case 'sqlite':
+            $sql = array(
+                "CREATE TABLE IF NOT EXISTS emerg_targets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope VARCHAR(8) NOT NULL,
+                    target VARCHAR(255) NOT NULL,
+                    active TINYINT NOT NULL DEFAULT 0,
+                    until INTEGER NOT NULL DEFAULT 0,
+                    source VARCHAR(16) NOT NULL DEFAULT 'manual',
+                    note VARCHAR(255) NOT NULL DEFAULT '',
+                    updated INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE (scope, target)
+                )",
+                "CREATE TABLE IF NOT EXISTS emerg_routes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(255) NOT NULL DEFAULT '',
+                    scope VARCHAR(8) NOT NULL DEFAULT 'all',
+                    target VARCHAR(255) NOT NULL DEFAULT '',
+                    field VARCHAR(16) NOT NULL DEFAULT 'event',
+                    op VARCHAR(10) NOT NULL DEFAULT 'contains',
+                    value VARCHAR(255) NOT NULL DEFAULT '',
+                    min_severity VARCHAR(16) NOT NULL DEFAULT 'Unknown',
+                    enabled TINYINT NOT NULL DEFAULT 1
+                )",
+            );
+            $col = "VARCHAR(8) NOT NULL DEFAULT 'all'";
+            $tgt = "VARCHAR(255) NOT NULL DEFAULT ''";
+            break;
+        case 'sqlsrv':
+            $sql = array(
+                "IF OBJECT_ID('emerg_targets', 'U') IS NULL
+                CREATE TABLE emerg_targets (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    scope VARCHAR(8) NOT NULL,
+                    target VARCHAR(255) NOT NULL,
+                    active TINYINT NOT NULL DEFAULT 0,
+                    until INT NOT NULL DEFAULT 0,
+                    source VARCHAR(16) NOT NULL DEFAULT 'manual',
+                    note VARCHAR(255) NOT NULL DEFAULT '',
+                    updated INT NOT NULL DEFAULT 0,
+                    CONSTRAINT scope_target UNIQUE (scope, target)
+                )",
+                "IF OBJECT_ID('emerg_routes', 'U') IS NULL
+                CREATE TABLE emerg_routes (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL DEFAULT '',
+                    scope VARCHAR(8) NOT NULL DEFAULT 'all',
+                    target VARCHAR(255) NOT NULL DEFAULT '',
+                    field VARCHAR(16) NOT NULL DEFAULT 'event',
+                    op VARCHAR(10) NOT NULL DEFAULT 'contains',
+                    value VARCHAR(255) NOT NULL DEFAULT '',
+                    min_severity VARCHAR(16) NOT NULL DEFAULT 'Unknown',
+                    enabled TINYINT NOT NULL DEFAULT 1
+                )",
+            );
+            $col = "VARCHAR(8) NOT NULL DEFAULT 'all'";
+            $tgt = "VARCHAR(255) NOT NULL DEFAULT ''";
+            break;
+        case 'mysql':
+        default:
+            $sql = array(
+                "CREATE TABLE IF NOT EXISTS emerg_targets (
+                    id int(255) NOT NULL AUTO_INCREMENT,
+                    scope varchar(8) NOT NULL,
+                    target varchar(255) NOT NULL,
+                    active tinyint(4) NOT NULL DEFAULT '0',
+                    until int(11) NOT NULL DEFAULT '0',
+                    source varchar(16) NOT NULL DEFAULT 'manual',
+                    note varchar(255) NOT NULL DEFAULT '',
+                    updated int(11) NOT NULL DEFAULT '0',
+                    PRIMARY KEY (id),
+                    UNIQUE KEY scope_target (scope, target)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8",
+                "CREATE TABLE IF NOT EXISTS emerg_routes (
+                    id int(255) NOT NULL AUTO_INCREMENT,
+                    name varchar(255) NOT NULL DEFAULT '',
+                    scope varchar(8) NOT NULL DEFAULT 'all',
+                    target varchar(255) NOT NULL DEFAULT '',
+                    field varchar(16) NOT NULL DEFAULT 'event',
+                    op varchar(10) NOT NULL DEFAULT 'contains',
+                    value varchar(255) NOT NULL DEFAULT '',
+                    min_severity varchar(16) NOT NULL DEFAULT 'Unknown',
+                    enabled tinyint(4) NOT NULL DEFAULT '1',
+                    PRIMARY KEY (id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8",
+            );
+            $col = "varchar(8) NOT NULL DEFAULT 'all'";
+            $tgt = "varchar(255) NOT NULL DEFAULT ''";
+            break;
+    }
+    $ok = true;
+    foreach($sql as $q){if($conn->exec($q) === false){$ok = false;}}
+
+    # emerg predates targeting, so these two are added to the existing table rather
+    # than shipped in it. Defaulting scope to 'all' keeps every existing row meaning
+    # exactly what it meant before: shown to every client.
+    if(!uns_ensure_column($conn, $driver, 'emerg', 'scope', $col)){$ok = false;}
+    if(!uns_ensure_column($conn, $driver, 'emerg', 'target', $tgt)){$ok = false;}
+    return $ok;
+}
+
+function uns_emerg_ensure($conn, $driver)
+{
+    static $ensured = false;
+    if(!$ensured){db_create_emerg_tables($conn, $driver); $ensured = true;}
+}
+
+# Read-then-create, for the same reason uns_groups_select() does it: the client page
+# runs this on every hit and must not issue DDL to prove the tables are there.
+function uns_emerg_select($conn, $driver, $sql, $params = array())
+{
+    static $created = false;
+
+    $stmt = $conn->prepare($sql);
+    if($stmt && $stmt->execute($params)){return $stmt;}
+    if($created){return false;}
+
+    $created = true;
+    db_create_emerg_tables($conn, $driver);
+
+    $stmt = $conn->prepare($sql);
+    if($stmt && $stmt->execute($params)){return $stmt;}
+    return false;
+}
+
+# An emergency target counts only while it is active and unexpired. until = 0 means
+# it runs until something clears it.
+function uns_emerg_target_live($row, $now)
+{
+    if(empty($row['active'])){return false;}
+    $until = isset($row['until']) ? (int)$row['until'] : 0;
+    return ($until <= 0 || $until > $now);
+}
+
+# The live emergency target covering this client, or false. A target naming the
+# client beats one naming a group it belongs to, and among groups the highest
+# priority wins - the same ordering uns_client_groups() already returns.
+function uns_emerg_target_for_client($conn, $driver, $client, $now = null)
+{
+    if($now === null){$now = time();}
+
+    $stmt = uns_emerg_select($conn, $driver,
+        "SELECT * FROM emerg_targets WHERE scope = 'client' AND target = ?", array($client));
+    if($stmt)
+    {
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if($row && uns_emerg_target_live($row, $now)){return $row;}
+    }
+
+    foreach(uns_client_groups($conn, $driver, $client) as $g)
+    {
+        $gs = uns_emerg_select($conn, $driver,
+            "SELECT * FROM emerg_targets WHERE scope = 'group' AND target = ?", array((string)$g['id']));
+        if(!$gs){continue;}
+        $row = $gs->fetch(PDO::FETCH_ASSOC);
+        if($row && uns_emerg_target_live($row, $now)){return $row;}
+    }
+    return false;
+}
+
+# Emergency URLs for one scope/target, as [[url, refresh], ...]. Falls back to the
+# shared scope='all' list when the target has none of its own.
+function uns_emerg_urls($conn, $driver, $scope = 'all', $target = '')
+{
+    $out = array();
+    if($scope !== 'all')
+    {
+        $stmt = uns_emerg_select($conn, $driver,
+            "SELECT url, refresh FROM emerg WHERE enabled = '1' AND scope = ? AND target = ?",
+            array($scope, (string)$target));
+        if($stmt)
+        {
+            while($row = $stmt->fetch(PDO::FETCH_ASSOC)){$out[] = array($row['url'], $row['refresh']);}
+        }
+        if($out){return $out;}
+    }
+
+    $stmt = uns_emerg_select($conn, $driver,
+        "SELECT url, refresh FROM emerg WHERE enabled = '1' AND scope = 'all'");
+    if(!$stmt)
+    {
+        # Pre-targeting database that has not been migrated yet: every row is global.
+        $stmt = $conn->query("SELECT url, refresh FROM emerg WHERE enabled = '1'");
+        if(!$stmt){return $out;}
+    }
+    while($row = $stmt->fetch(PDO::FETCH_ASSOC)){$out[] = array($row['url'], $row['refresh']);}
+    return $out;
+}
+
+# Whether this client is in emergency mode, and what to show if so.
+# Returns array(bool $active, array $urls).
+function uns_emerg_for_client($conn, $driver, $client, $global_on)
+{
+    $now = time();
+
+    if($global_on)
+    {
+        # The global switch can carry an expiry too, so a monitor-raised site-wide
+        # alert lapses on its own rather than needing the monitor to run again.
+        $until = (int)uns_config_get($conn, $driver, 'emerg_global_until', '0');
+        if($until <= 0 || $until > $now)
+        {
+            return array(true, uns_emerg_urls($conn, $driver, 'all', ''));
+        }
+    }
+
+    $t = uns_emerg_target_for_client($conn, $driver, $client, $now);
+    if($t)
+    {
+        return array(true, uns_emerg_urls($conn, $driver, $t['scope'], $t['target']));
+    }
+    return array(false, array());
+}
+
+# The admin forms carry scope and target in one "scope:target" select, so the pair can
+# never arrive half-set. Anything unrecognised degrades to the global scope.
+function uns_parse_scope($raw)
+{
+    $raw   = (string)$raw;
+    $parts = explode(':', $raw, 2);
+    $scope = $parts[0];
+    $target = isset($parts[1]) ? $parts[1] : '';
+    if(!in_array($scope, array('all', 'group', 'client'), true)){return array('all', '');}
+    if($scope === 'all'){return array('all', '');}
+    if($target === ''){return array('all', '');}
+    return array($scope, $target);
+}
+
+# Raises or clears the emergency for one group or client. One row per scope/target,
+# updated in place, so history does not accumulate and the unique key holds.
+function uns_emerg_target_set($conn, $driver, $scope, $target, $active, $until = 0, $source = 'manual', $note = '')
+{
+    uns_emerg_ensure($conn, $driver);
+    $target = (string)$target;
+    $now    = time();
+
+    $sel = $conn->prepare("SELECT id FROM emerg_targets WHERE scope = ? AND target = ?");
+    $id  = 0;
+    if($sel && $sel->execute(array($scope, $target)))
+    {
+        $row = $sel->fetch(PDO::FETCH_ASSOC);
+        if($row){$id = (int)$row['id'];}
+    }
+
+    if($id > 0)
+    {
+        $upd = $conn->prepare("UPDATE emerg_targets SET active = ?, until = ?, source = ?, note = ?, updated = ? WHERE id = ?");
+        return $upd ? $upd->execute(array($active ? 1 : 0, (int)$until, $source, $note, $now, $id)) : false;
+    }
+    $ins = $conn->prepare("INSERT INTO emerg_targets (scope, target, active, until, source, note, updated) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    return $ins ? $ins->execute(array($scope, $target, $active ? 1 : 0, (int)$until, $source, $note, $now)) : false;
+}
+
+# --- Alert routing ----------------------------------------------------------
+#
+# A route says "an alert whose <field> <op> <value> puts <scope>:<target> into
+# emergency mode". Both the admin screen and the monitor read these definitions from
+# here so the choices offered can never drift from the ones actually evaluated.
+
+function uns_route_fields()
+{
+    return array(
+        'event'       => 'CAP event',
+        'category'    => 'CAP category',
+        'severity'    => 'Severity',
+        'urgency'     => 'Urgency',
+        'certainty'   => 'Certainty',
+        'area'        => 'Area description',
+        'geocode'     => 'Geocode (SAME/FIPS/UGC)',
+        'sender'      => 'Sender',
+        'headline'    => 'Headline',
+        'description' => 'Description',
+    );
+}
+
+function uns_route_ops()
+{
+    return array(
+        'contains' => 'contains',
+        'equals'   => 'is exactly',
+        'regex'    => 'matches regex',
+        'any'      => 'anything (severity only)',
+    );
+}
+
+function uns_severity_rank($severity)
+{
+    $order = array('Unknown' => 0, 'Minor' => 1, 'Moderate' => 2, 'Severe' => 3, 'Extreme' => 4);
+    return isset($order[$severity]) ? $order[$severity] : 0;
+}
+
+# True if one route matches one parsed alert.
+#
+# Alert fields that CAP allows to repeat (category, area, geocode) are held as arrays
+# by the parser and matched if ANY element matches - an alert covering three counties
+# should reach a route naming any one of them.
+function uns_route_matches($route, $alert)
+{
+    if(empty($route['enabled'])){return false;}
+
+    $min = isset($route['min_severity']) ? $route['min_severity'] : 'Unknown';
+    if(uns_severity_rank(isset($alert['severity']) ? $alert['severity'] : '') < uns_severity_rank($min))
+    {
+        return false;
+    }
+
+    $op = isset($route['op']) ? $route['op'] : 'contains';
+    if($op === 'any'){return true;}
+
+    $field  = isset($route['field']) ? $route['field'] : 'event';
+    $needle = (string)(isset($route['value']) ? $route['value'] : '');
+    if($needle === ''){return false;}
+
+    $hay = isset($alert[$field]) ? $alert[$field] : '';
+    $candidates = is_array($hay) ? $hay : array($hay);
+
+    foreach($candidates as $candidate)
+    {
+        $candidate = (string)$candidate;
+        if($candidate === ''){continue;}
+        switch($op)
+        {
+            case 'equals':
+                if(strcasecmp($candidate, $needle) === 0){return true;}
+                break;
+            case 'regex':
+                # Delimiters are escaped rather than chosen by the author, so a rule
+                # cannot smuggle in pattern modifiers.
+                if(@preg_match('/'.str_replace('/', '\/', $needle).'/i', $candidate) === 1){return true;}
+                break;
+            case 'contains':
+            default:
+                if(stripos($candidate, $needle) !== false){return true;}
+                break;
+        }
+    }
+    return false;
+}
+
 # ----------------------------------------------------------------------------
 
 # Reads the app version from the VERSION file, so the version only needs updating in one

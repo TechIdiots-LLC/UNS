@@ -250,7 +250,12 @@ function get_client_url($client)
     }
     $stmt = $conn->query("SELECT * FROM settings");
     $array = $stmt->fetch(PDO::FETCH_ASSOC);
-    $emerg_fl = $array['emerg'];
+
+    # Emergency mode is either global (settings.emerg, every client) or targeted at a
+    # group or single client. uns_emerg_for_client() applies the precedence and hands
+    # back the URLs that go with whichever one is in force.
+    list($emerg_fl, $emerg_urls) = uns_emerg_for_client($conn, $driver, $client, !empty($array['emerg']));
+
     if(!$emerg_fl)
     {
         # The client's own list. $client is whitelisted to [A-Za-z0-9_]+ above, so it's
@@ -292,19 +297,11 @@ function get_client_url($client)
 
     }else
     {
-        # Emergency mode is global: every client gets the same enabled emergency URLs.
-        #
-        # This used to read "WHERE cl_id = ? OR cl_id = '0' AND enabled = '1'", targeting
-        # an emerg.cl_id column that has never existed in any of the three schemas and
-        # that nothing ever wrote. The statement therefore could not prepare on SQLite
-        # (fatal) or execute on MySQL (no rows), so turning emergency mode on served
-        # nothing at all. The old condition was also mis-grouped - "A OR B AND C" binds
-        # as "A OR (B AND C)", so the per-client branch ignored `enabled` entirely.
-        $stmt = $conn->query("SELECT * FROM emerg WHERE enabled = '1'");
-
-        while($array = $stmt->fetch(PDO::FETCH_ASSOC))
+        # Already resolved above: the URLs for whichever emergency is in force, global
+        # or targeted at this client's group or the client itself.
+        foreach($emerg_urls as $link)
         {
-            $ret[] = array($array['url'], $array['refresh'], 1);
+            $ret[] = array($link[0], $link[1], 1);
         }
     }
     if(empty($ret[0]))

@@ -67,6 +67,39 @@
                     </form>
                 </table>
                 <br />
+{if $can_emerg}
+                <table border="1px" width="100%">
+                    <tr class="{if $emerg_live}Emerg{else}client_table_head{/if}">
+                        <th colspan="2">Emergency Mode for this Group
+{if $emerg_live}
+                            <br /><font size="4">This group is in emergency mode{if $emerg_until > 0}
+                            until {$emerg_until|date_format:"%Y-%m-%d %H:%M"}{/if}.</font>
+{else}
+                            <br /><font size="1">Puts only this group's clients onto the emergency URLs.
+                            Every other screen carries on as normal.</font>
+{/if}
+                        </th>
+                    </tr>
+                    <tr class="client_table_tail">
+                        <td colspan="2" align="center">
+                            <form name="group_emerg" action="?func=emerg_target_set" method="POST">
+                                <input type="hidden" name="scope" value="group:{$group.id}">
+                                <input type="hidden" name="back" value="func=edit_group&amp;group={$group.id}">
+{if $emerg_live}
+                                <input type="hidden" name="on" value="0">
+                                <input type="submit" value="Clear Emergency for this Group">
+{else}
+                                <input type="hidden" name="on" value="1">
+                                for <input type="text" name="minutes" style="width:45px" value="0"> minutes
+                                <font size="1">(0 = until cleared)</font>
+                                <input type="submit" value="Set Emergency for this Group">
+{/if}
+                            </form>
+                        </td>
+                    </tr>
+                </table>
+                <br />
+{/if}
                 <table border="1px" width="100%">
                     <form name="group_members" action="?func=save_group_members&amp;group={$group.id}" method="POST">
                     <tr class="client_table_head">
