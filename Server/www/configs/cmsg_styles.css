@@ -40,13 +40,25 @@ a {
 	vertical-align: middle;
 }
 
+/*
+    The wrapper table is 100% tall, so its two rows share whatever height is going. The
+    header used to be pinned to 67px in the markup to stop that, which meant the band
+    was sized to a particular logo rather than to whatever logo is actually there.
+
+    Asking for 1px instead means "as short as your contents allow": a table cell cannot
+    be smaller than what is in it, so the header ends up exactly as deep as the logo,
+    and the row below takes all the remaining height. No dimension here depends on the
+    image.
+*/
 .cmsgheader {
 	text-align: center;
 	background-color: #003466;
+	height: 1px;
 }
 .InfoCell {
 	text-align: center;
 	background-color: #FFFFFF;
+	height: 100%;
 }
 .MessageTitle {
 	text-align: center;
