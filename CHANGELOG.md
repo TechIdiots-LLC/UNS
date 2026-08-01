@@ -8,6 +8,17 @@
 - _...Add new stuff here..._
 
 
+## 3.1.1
+### ✨ Features and improvements
+- **Single sign-on.** UNS can now trust an identity the web server has already established, rather than collecting a password itself - `mod_auth_openidc` for ADFS 2016+ or Entra ID, a Shibboleth SP for SAML federations, or IIS Windows authentication. Every protocol detail, certificate and signature check stays in a module built for the job, and one integration covers every provider. Only `admin/sso.php` needs protecting; the rest of the admin folder stays reachable so the built-in administrator can still sign in with a password when the identity provider is unreachable. Accounts can be created on first sign-in, and an optional group claim grants the two administrative permissions - re-checked at every sign-in, so removing someone at the provider takes effect in UNS too. Configured under **UNS Options**, which also reports what the web server is currently providing.
+- **LDAP can be encrypted.** STARTTLS and LDAPS are selectable under UNS Options, with certificate verification on by default. A failed STARTTLS is reported rather than quietly falling back to an unencrypted bind. The bind also sets protocol version 3 and disables referrals, both of which Active Directory expects, and builds a connection URI instead of passing host and port separately - that form of `ldap_connect()` is deprecated as of PHP 8.3.
+- Every release now also carries `uns-release.zip` and `uns-release.tar.gz` alongside the versioned archives, so a download link written as `/releases/latest/download/uns-release.zip` keeps working across releases. The file keeps that name inside its own release forever, which is why it is not called "latest" - it is the `/latest/` in the URL that picks the newest release, not the filename.
+
+### 🐞 Bug fixes
+- **The UNS logo was stretched on every custom message** shown through the UNS wrapper. It was marked up as 462x70 - dimensions inherited from a much older, wider logo - while the image UNS actually ships is 125x74, so it was stretched nearly four times too wide and blurred by the upscale at the same time. Nothing sets a size now; the stylesheet only caps it, so replacing `logo.png` with an image of any shape renders correctly.
+- **The source files stated the wrong licence.** Every header claimed GPL version 3 while `LICENSE` is, and always has been, GPL version 2 - a mismatch dating back to the original 1.0 import. They now match, and carry an SPDX identifier. `install.php`'s header was also truncated mid-notice and is complete again.
+
+
 ## 3.1.0
 ### ✨ Features and improvements
 - **Client groups.** A group is a named collection of clients with its own URL list. Membership is many-to-many, so one screen can sit in several groups at once - a building, and a role such as "outdoor". A group either **adds** its URLs to each member's normal rotation, or **replaces** them entirely for a takeover; where a client lands in more than one active replace group, the highest **priority** wins. Groups can be parked without being deleted, and removing a client or a group clears its membership so a screen registered later under a recycled name cannot inherit somebody else's groups.

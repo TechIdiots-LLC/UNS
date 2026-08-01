@@ -72,8 +72,13 @@ jobs:
           # by redirecting to that asset in whatever the newest release is - which only
           # works if the filename is the same in every release, and the versioned ones
           # above are not. The archives inside still unpack to uns-<version>/.
-          cp "uns-${VERSION}.zip"    uns-latest.zip
-          cp "uns-${VERSION}.tar.gz" uns-latest.tar.gz
+          #
+          # Named "release" rather than "latest" because this file stays attached to its
+          # own release for good: an old release still holding a file called
+          # uns-latest.zip would be claiming something untrue. It is the /latest/ in the
+          # URL that picks the newest one, not the filename.
+          cp "uns-${VERSION}.zip"    uns-release.zip
+          cp "uns-${VERSION}.tar.gz" uns-release.tar.gz
 
       - name: Upload release archives
         uses: actions/upload-artifact@v4

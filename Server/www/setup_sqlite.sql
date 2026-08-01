@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 INSERT INTO settings (emerg, built_in_admin, uns_ver, svn_rev)
-SELECT 0, 0, '3.1.0', '80' WHERE NOT EXISTS (SELECT 1 FROM settings);
+SELECT 0, 0, '3.1.1', '80' WHERE NOT EXISTS (SELECT 1 FROM settings);
 
 CREATE TABLE IF NOT EXISTS rss_feeds (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
