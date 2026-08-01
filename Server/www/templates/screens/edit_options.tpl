@@ -90,6 +90,30 @@
                                 <td><input type="text" name="ldap_port" style="width:100%" value="{$ldap_port}"{if !$ldap} disabled{/if}/></td>
                             </tr>
                             <tr class="client_table_body">
+                                <td>LDAP Encryption
+{if $ldap_enc == 'none'}
+                                    <br /><font size="1" color="red">Not encrypted. The password typed into the login
+                                    form is sent to the domain controller in the clear.</font>
+{/if}
+                                </td>
+                                <td>
+                                    <select name="ldap_encryption" style="width:100%">
+                                        <option value="none"{if $ldap_enc == 'none'} selected{/if}>None - plaintext (not recommended)</option>
+                                        <option value="starttls"{if $ldap_enc == 'starttls'} selected{/if}>STARTTLS on the normal port (389)</option>
+                                        <option value="ldaps"{if $ldap_enc == 'ldaps'} selected{/if}>LDAPS - implicit TLS (636)</option>
+                                    </select>
+                                    <font size="1">STARTTLS is not offered on the Global Catalog port 3268 - use 389 with
+                                    STARTTLS, 636 for LDAPS, or 3269 for the Global Catalog over LDAPS.</font>
+                                </td>
+                            </tr>
+                            <tr class="client_table_body">
+                                <td>Verify the LDAP certificate?
+                                    <br /><font size="1">Turning this off removes most of the protection encryption
+                                    gives you. If your domain controller uses an internal CA, trust that CA on the web
+                                    server instead.</font></td>
+                                <td><input type="checkbox" name="ldap_verify_cert" value="1"{if $ldap_verify} checked{/if}/></td>
+                            </tr>
+                            <tr class="client_table_body">
                                 <td>Redirect Page Timeout <font size="1">( 0 = instant redirect )</font></td>
                                 <td><input type="text" name="page_timeout" style="width:100%" value="{$page_timeout}"/></td>
                             </tr>

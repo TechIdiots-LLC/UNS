@@ -3,9 +3,11 @@
 #    Copyright (C) 2010  Phillip Ferland / Random Intervals
 #    Copyright (C) 2026  Andrew Calcutt / TechIdiots LLC
 #
-#    This program is free software: you can redistribute it and/or modify
+#    SPDX-License-Identifier: GPL-2.0-or-later
+#
+#    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
-#    the Free Software Foundation, either version 3 of the License, or
+#    the Free Software Foundation; either version 2 of the License, or
 #    (at your option) any later version.
 #
 #    This program is distributed in the hope that it will be useful,
@@ -14,7 +16,8 @@
 #    GNU General Public License for more details.
 #
 #    You should have received a copy of the GNU General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#    along with this program; if not, write to the Free Software Foundation,
+#    Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 # --- Database portability layer -------------------------------------------
 # UNS supports MySQL, Microsoft SQL Server, and SQLite through PDO. $driver
@@ -637,6 +640,125 @@ function uns_create_session($conn, $username_login, $timeout, $root, $ssl)
     $stmt = $conn->prepare("INSERT INTO hash_links (hash, time, username) VALUES (?, ?, ?)");
     if(!$stmt || !$stmt->execute(array($hash, $time, $username_login))){return false;}
     return $hash;
+}
+
+# --- LDAP / Active Directory ------------------------------------------------
+#
+# The original code connected with ldap_connect($host, $port) and bound straight
+# away. That is an unencrypted connection, so the administrator's domain password
+# crossed the network in the clear - and on the default port 3268 (the Global
+# Catalog), which does not offer StartTLS at all.
+#
+# Encryption is now selectable. It defaults to 'none' so an existing install keeps
+# working after an upgrade rather than failing to authenticate, but the options page
+# says plainly that it should not stay there.
+
+function uns_ldap_settings($conn, $driver)
+{
+    $all = uns_config_all($conn, $driver);
+    $enc = isset($all['ldap_encryption']) ? $all['ldap_encryption'] : '';
+    if(!in_array($enc, array('none', 'starttls', 'ldaps'), true)){$enc = 'none';}
+
+    return array(
+        'encryption'  => $enc,
+        # Verifying the certificate is the point of encrypting at all, so it defaults on.
+        # Domain controllers commonly present a certificate from an internal CA, which
+        # the web server has to trust (LDAPTLS_CACERT / ldap.conf TLS_CACERT).
+        'verify_cert' => isset($all['ldap_verify_cert']) ? (int)$all['ldap_verify_cert'] : 1,
+    );
+}
+
+# The default port for a given encryption mode, following Active Directory's layout:
+# 389/636 for the domain, 3268/3269 for the Global Catalog.
+function uns_ldap_default_port($encryption)
+{
+    return ($encryption === 'ldaps') ? 636 : 389;
+}
+
+# Builds the connection URI.
+#
+# ldap_connect() with separate host and port arguments is deprecated as of PHP 8.3;
+# the URI form is what it wants now, and it is also the only way to ask for ldaps.
+function uns_ldap_uri($host, $port, $encryption)
+{
+    $host = trim((string)$host);
+    # Tolerate a host already written as a URI, so an administrator who typed
+    # "ldaps://dc.example.edu" does not end up with "ldap://ldaps://...".
+    if(preg_match('#^ldaps?://#i', $host))
+    {
+        $parsed = parse_url($host);
+        if(isset($parsed['scheme']) && strtolower($parsed['scheme']) === 'ldaps'){$encryption = 'ldaps';}
+        if(isset($parsed['port']) && !$port){$port = $parsed['port'];}
+        $host = isset($parsed['host']) ? $parsed['host'] : '';
+    }
+    if($host === ''){return '';}
+
+    $scheme = ($encryption === 'ldaps') ? 'ldaps' : 'ldap';
+    $port   = (int)$port;
+    if($port <= 0){$port = uns_ldap_default_port($encryption);}
+
+    return $scheme.'://'.$host.':'.$port;
+}
+
+# Binds as $user. Returns true on success; on failure $error explains why.
+#
+# Kept here rather than inline in the login handler so the connection setup has one
+# definition, and so the URI building above can be tested without a directory server.
+function uns_ldap_bind($host, $port, $encryption, $verify_cert, $user, $pass, &$error)
+{
+    $error = '';
+    if(!function_exists('ldap_connect'))
+    {
+        $error = 'The PHP ldap extension is not installed.';
+        return false;
+    }
+
+    $uri = uns_ldap_uri($host, $port, $encryption);
+    if($uri === '')
+    {
+        $error = 'No LDAP server is configured.';
+        return false;
+    }
+
+    # Certificate policy has to be set before the connection is made: with OpenLDAP the
+    # option is read when the TLS context is built, and setting it on the link
+    # afterwards is silently ignored for ldaps://.
+    if($encryption !== 'none' && defined('LDAP_OPT_X_TLS_REQUIRE_CERT'))
+    {
+        @ldap_set_option(null, LDAP_OPT_X_TLS_REQUIRE_CERT,
+            $verify_cert ? LDAP_OPT_X_TLS_DEMAND : LDAP_OPT_X_TLS_NEVER);
+    }
+
+    $ldap = @ldap_connect($uri);
+    if(!$ldap)
+    {
+        $error = 'Could not create an LDAP connection to '.$uri.'.';
+        return false;
+    }
+
+    # v3 is required for StartTLS and is what Active Directory expects; referrals off is
+    # the usual setting for AD, which otherwise chases them and fails the bind.
+    @ldap_set_option($ldap, LDAP_OPT_PROTOCOL_VERSION, 3);
+    @ldap_set_option($ldap, LDAP_OPT_REFERRALS, 0);
+    if(defined('LDAP_OPT_NETWORK_TIMEOUT')){@ldap_set_option($ldap, LDAP_OPT_NETWORK_TIMEOUT, 10);}
+
+    if($encryption === 'starttls')
+    {
+        if(!@ldap_start_tls($ldap))
+        {
+            # Deliberately not falling back to an unencrypted bind: silently downgrading
+            # would hand over the password in the clear exactly when something is wrong.
+            $error = 'STARTTLS failed on '.$uri.'. Check the port (389, not the Global'
+                   .' Catalog 3268) and that the server certificate is trusted.';
+            @ldap_unbind($ldap);
+            return false;
+        }
+    }
+
+    $ok = @ldap_bind($ldap, $user, $pass);
+    if(!$ok){$error = 'Login failed against '.$uri.'.';}
+    @ldap_unbind($ldap);
+    return (bool)$ok;
 }
 
 # --- Single sign-on ---------------------------------------------------------

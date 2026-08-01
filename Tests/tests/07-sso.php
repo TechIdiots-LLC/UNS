@@ -199,3 +199,71 @@ uns_test('the login page shows no SSO button when it is off', function($site) {
     assert_not_contains('sso.php', $r['body'], 'no SSO link');
     assert_contains('name="pass"', $r['body'], 'just the password form');
 });
+
+# --- LDAP transport security -------------------------------------------------
+#
+# The bind itself needs a directory server, so what is checked here is the part that
+# decides how the connection is made - which is where the plaintext bug lived.
+
+uns_test('the LDAP URI carries the scheme and a sensible port', function($site) {
+    assert_same('ldap://dc.example.edu:389',  uns_ldap_uri('dc.example.edu', 0, 'none'),
+        'plain LDAP defaults to 389');
+    assert_same('ldap://dc.example.edu:389',  uns_ldap_uri('dc.example.edu', 0, 'starttls'),
+        'STARTTLS uses the same port, upgrading in place');
+    assert_same('ldaps://dc.example.edu:636', uns_ldap_uri('dc.example.edu', 0, 'ldaps'),
+        'LDAPS defaults to 636');
+    assert_same('ldaps://dc.example.edu:3269', uns_ldap_uri('dc.example.edu', 3269, 'ldaps'),
+        'an explicit Global Catalog TLS port is kept');
+});
+
+uns_test('a host already written as a URI is not doubled up', function($site) {
+    assert_same('ldaps://dc.example.edu:636', uns_ldap_uri('ldaps://dc.example.edu', 0, 'none'),
+        'an ldaps:// host implies LDAPS even if the setting says otherwise');
+    assert_same('ldap://dc.example.edu:389',  uns_ldap_uri('ldap://dc.example.edu', 0, 'none'),
+        'an ldap:// host is accepted as written');
+    assert_same('', uns_ldap_uri('', 0, 'none'), 'no host means no URI');
+});
+
+uns_test('the encryption setting defaults to what an old install did', function($site) {
+    # Defaulting to anything else would break authentication on upgrade for anyone
+    # whose domain controller is not set up for TLS.
+    $set = uns_ldap_settings($site->db(), 'sqlite');
+    assert_same('none', $set['encryption'], 'unset means plaintext, as before');
+    assert_same(1, $set['verify_cert'], 'but certificate verification defaults on');
+
+    $site->exec("INSERT INTO uns_config (cfg_key, cfg_value) VALUES ('ldap_encryption', 'starttls')");
+    assert_same('starttls', uns_ldap_settings($site->db(), 'sqlite')['encryption'], 'stored value is used');
+});
+
+uns_test('an unrecognised encryption setting is not trusted', function($site) {
+    $site->exec("INSERT INTO uns_config (cfg_key, cfg_value) VALUES ('ldap_encryption', 'sort-of')");
+    assert_same('none', uns_ldap_settings($site->db(), 'sqlite')['encryption'],
+        'falls back rather than guessing');
+});
+
+uns_test('a missing LDAP server is reported, not attempted', function($site) {
+    $err = '';
+    assert_false(uns_ldap_bind('', 0, 'none', 1, 'u', 'p', $err), 'refuses with no host');
+    assert_true($err !== '', 'and explains itself rather than failing silently');
+    # Without the extension the function stops earlier, with its own message - which is
+    # itself the correct behaviour, so only assert the host message when it can be reached.
+    if(extension_loaded('ldap'))
+    {
+        assert_contains('No LDAP server', $err, 'names the missing setting');
+    }
+    else
+    {
+        assert_contains('ldap extension', $err, 'reports the missing extension instead');
+    }
+});
+
+uns_test('the options page warns while LDAP is unencrypted', function($site) {
+    $cookie = $site->adminLogin();
+    $r = $site->admin('func=edit_options', null, $cookie);
+    assert_contains('in the clear', $r['body'], 'the plaintext warning is shown');
+    assert_contains('ldap_encryption', $r['body'], 'and the setting is offered');
+
+    $site->exec("INSERT INTO uns_config (cfg_key, cfg_value) VALUES ('ldap_encryption', 'ldaps')");
+    $r = $site->admin('func=edit_options', null, $cookie);
+    assert_not_contains('in the clear', $r['body'], 'warning goes away once encrypted');
+});

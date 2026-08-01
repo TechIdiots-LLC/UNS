@@ -128,7 +128,24 @@ Set a logout URL if your provider supports RP-initiated logout. Without one,
 logging out of UNS ends only the UNS session - the provider will sign the same
 person straight back in.
 
-Note on LDAP: the older "Active Directory (LDAP)" mode has UNS collect the
-user's domain password and bind with it, over a plaintext connection on port
-3268. Single sign-on removes both problems, since UNS never sees a domain
-credential.
+Active Directory (LDAP) over an encrypted connection
+----------------------------------------------------
+If you stay on LDAP rather than moving to single sign-on, set "LDAP Encryption"
+in UNS Options. UNS collects the user's domain password and binds with it, so
+without encryption that password crosses the network in the clear.
+
+  STARTTLS   upgrades a normal connection on port 389. This is usually what you
+             want. It is not offered on the Global Catalog port 3268.
+  LDAPS      implicit TLS, normally port 636, or 3269 for the Global Catalog.
+  None       no encryption. This is the default only so that upgrading UNS does
+             not break logins on a domain controller that has no certificate.
+
+Leave "Verify the LDAP certificate" on. Domain controllers usually present a
+certificate from an internal CA, which the web server has to trust - set
+TLS_CACERT in ldap.conf, or the LDAPTLS_CACERT environment variable, rather than
+turning verification off.
+
+UNS will not silently fall back to an unencrypted bind if STARTTLS fails, since
+that would hand over the password in the clear at exactly the moment something
+is wrong. It reports the failure instead.
+

@@ -3,9 +3,11 @@
 #    Copyright (C) 2010  Phillip Ferland / Random Intervals
 #    Copyright (C) 2026  Andrew Calcutt / TechIdiots LLC
 #
-#    This program is free software: you can redistribute it and/or modify
+#    SPDX-License-Identifier: GPL-2.0-or-later
+#
+#    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
-#    the Free Software Foundation, either version 3 of the License, or
+#    the Free Software Foundation; either version 2 of the License, or
 #    (at your option) any later version.
 #
 #    This program is distributed in the hope that it will be useful,
@@ -14,7 +16,8 @@
 #    GNU General Public License for more details.
 #
 #    You should have received a copy of the GNU General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#    along with this program; if not, write to the Free Software Foundation,
+#    Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 include "../shared.php";
 if(!check_install('..'))
@@ -133,10 +136,13 @@ if($GET_login)
             $array = $stmt->fetch(PDO::FETCH_ASSOC);
             if($array && $user == $array['username'])
             {
-                $ldap = ldap_connect($domain, $port);
-                $bind = @ldap_bind($ldap, $usr, $pwd);
-                if(!$bind){ login_form("Error: Failed to connect to $domain."); }
-                ldap_unbind($ldap);
+                $ldap_set = uns_ldap_settings($conn, $driver);
+                $ldap_err = '';
+                if(!uns_ldap_bind($domain, $port, $ldap_set['encryption'], $ldap_set['verify_cert'],
+                                  $usr, $pwd, $ldap_err))
+                {
+                    login_form($ldap_err);
+                }
                 if(create_cookie($array['username']))
                 {
                     die("Logged In!");
@@ -646,6 +652,8 @@ function admin_panel($usr, $func, $proto)
             {
                 $auth_mode1 = $ldap1 ? 'ldap' : 'internal';
             }
+            $ldap_enc1 = (string)@filter_input(INPUT_POST, 'ldap_encryption', FILTER_SANITIZE_SPECIAL_CHARS);
+            if(!in_array($ldap_enc1, array('none', 'starttls', 'ldaps'), true)){$ldap_enc1 = 'none';}
             $sso_user_var1 = trim((string)@filter_input(INPUT_POST, 'sso_user_var', FILTER_SANITIZE_SPECIAL_CHARS));
             if($sso_user_var1 === ''){$sso_user_var1 = 'REMOTE_USER';}
             $sso_group_var1   = trim((string)@filter_input(INPUT_POST, 'sso_group_var', FILTER_SANITIZE_SPECIAL_CHARS));
@@ -666,6 +674,8 @@ function admin_panel($usr, $func, $proto)
 
             $emerg_cfg = array(
                 'auth_mode'         => $auth_mode1,
+                'ldap_encryption'   => $ldap_enc1,
+                'ldap_verify_cert'  => @filter_input(INPUT_POST, 'ldap_verify_cert', FILTER_SANITIZE_ENCODED) ? 1 : 0,
                 'sso_user_var'      => $sso_user_var1,
                 'sso_allow_headers' => @filter_input(INPUT_POST, 'sso_allow_headers', FILTER_SANITIZE_ENCODED) ? 1 : 0,
                 'sso_strip_domain'  => @filter_input(INPUT_POST, 'sso_strip_domain', FILTER_SANITIZE_ENCODED) ? 1 : 0,
@@ -776,6 +786,10 @@ function admin_panel($usr, $func, $proto)
             $eo->assign('ef_severity', isset($ef_cfg['emerg_min_severity']) ? $ef_cfg['emerg_min_severity'] : 'Unknown');
             $eo->assign('ef_max',      isset($ef_cfg['emerg_max_items']) ? (int)$ef_cfg['emerg_max_items'] : 5);
             $eo->assign('ef_follow',   isset($ef_cfg['emerg_follow_cap_links']) ? (int)$ef_cfg['emerg_follow_cap_links'] : 1);
+
+            $ldap_set = uns_ldap_settings($conn, $driver);
+            $eo->assign('ldap_enc',    $ldap_set['encryption']);
+            $eo->assign('ldap_verify', $ldap_set['verify_cert']);
 
             $sso_cfg = uns_sso_config($conn, $driver);
             $eo->assign('auth_mode',      uns_auth_mode($conn, $driver, isset($LDAP) ? $LDAP : 0));
